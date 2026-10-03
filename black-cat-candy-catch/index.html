@@ -186,17 +186,31 @@ function drawFloaters() {
 
 // ---------- candy ----------
 const CANDY_KINDS = ["corn", "wrapped", "pop"];
-function spawnCandy() {
-  const kind = CANDY_KINDS[(Math.random()*CANDY_KINDS.length)|0];
+const MIN_LAND_GAP = 1.25;   // min seconds between candy landings (fairness)
+function nextVy() {
   const speedBase = 70 + Math.min(elapsed * 2.5, 120);   // gentle ramp
+  return speedBase * (0.75 + Math.random()*0.6);
+}
+function spawnCandy(vy) {
+  const kind = CANDY_KINDS[(Math.random()*CANDY_KINDS.length)|0];
+  const y0 = -30;
   candies.push({
     x: 20 + Math.random() * (W - 40),
-    y: -30,
-    vy: speedBase * (0.75 + Math.random()*0.6),
+    y: y0,
+    vy,
     kind, rot: Math.random()*Math.PI*2, vr: (Math.random()-0.5)*3,
     wob: Math.random()*Math.PI*2, wobAmp: 20 + Math.random()*25,
-    wobFreq: 1.5 + Math.random()*1.5
+    wobFreq: 1.5 + Math.random()*1.5,
+    landAt: elapsed + ((H - 120) - y0) / vy   // predicted catch-line arrival
   });
+}
+// Would a candy falling this fast land too close to another candy's landing?
+function spawnIsFair(vy) {
+  const t = elapsed + ((H - 120) - (-30)) / vy;
+  for (const c of candies) {
+    if (Math.abs(c.landAt - t) < MIN_LAND_GAP) return false;
+  }
+  return true;
 }
 
 // ---------- flow ----------
@@ -261,13 +275,16 @@ function update(now) {
     cat.x = clampX(cat.x + dx * Math.min(1, dt * 14));
   }
 
-  // spawn (capped so the screen never gets crowded)
+  // spawn: capped, and never schedule two landings on top of each other
   spawnTimer -= dt;
-  if (spawnTimer <= 0 && candies.length < 5) {
-    spawnCandy();
-    spawnTimer = Math.max(0.45, 1.25 - elapsed * 0.01);
-  } else if (spawnTimer <= 0) {
-    spawnTimer = 0.3;
+  if (spawnTimer <= 0) {
+    const vy = nextVy();
+    if (candies.length < 5 && spawnIsFair(vy)) {
+      spawnCandy(vy);
+      spawnTimer = Math.max(0.45, 1.25 - elapsed * 0.01);
+    } else {
+      spawnTimer = 0.2;   // try again shortly
+    }
   }
 
   const catchY = H - 120;                 // vertical catch line (cat mouth height)
