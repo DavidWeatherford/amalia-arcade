@@ -61,6 +61,7 @@ let shake = 0;
 let particles = [];        // {x,y,vx,vy,life,maxLife,color,size}
 let floaters = [];         // {x,y,t,text}
 let missFlash = 0;
+let backBtn = null;   // {x,y,w,h} of the ‹ Arcade button, set each frame by drawBackButton
 
 const CAT_W = 96, CAT_SPEED = 520;
 const CAT_LOOKS = [
@@ -87,6 +88,7 @@ window.addEventListener("keyup", e => { keys[e.key] = false; });
 const pointers = new Map();   // pointerId -> clientX; insertion order = player order
 canvas.addEventListener("pointerdown", e => {
   sfx.unlock();
+  if (hitBackButton(e)) { window.location.href = "../"; return; }
   pointers.set(e.pointerId, e.clientX);
   if (state !== STATE.PLAYING) { startGame(); return; }
   if (pointers.size >= 2 && cats.length === 1) joinSecondCat();
@@ -627,6 +629,25 @@ function drawCenterText(title, lines, accent) {
   ctx.textAlign = "left";
 }
 
+function drawBackButton() {
+  const w = 122, h = 38;
+  const x = W / 2 - w / 2, y = 12;
+  backBtn = { x, y, w, h };
+  ctx.fillStyle = "rgba(10,5,20,0.55)";
+  roundRect(x, y, w, h, 19); ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.7)"; ctx.lineWidth = 2;
+  roundRect(x, y, w, h, 19); ctx.stroke();
+  ctx.fillStyle = "#ffffff"; ctx.font = "700 17px -apple-system, sans-serif";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText("‹ Arcade", W / 2, y + h / 2 + 1);
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+}
+function hitBackButton(e) {
+  if (!backBtn) return false;
+  const x = e.clientX || 0, y = e.clientY || 0;
+  return x >= backBtn.x && x <= backBtn.x + backBtn.w && y >= backBtn.y && y <= backBtn.y + backBtn.h;
+}
+
 function draw() {
   ctx.save();
   drawBackground();
@@ -641,6 +662,7 @@ function draw() {
     ctx.fillStyle = "rgba(255,40,60," + (missFlash * 0.35).toFixed(3) + ")";
     ctx.fillRect(0, 0, W, H);
   }
+  drawBackButton();
 
   if (state === STATE.TITLE) {
     const best = topScores.length ? topScores[0] : 0;
