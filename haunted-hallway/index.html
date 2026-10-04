@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Haunted Hallway! 👻</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #7ec8e3;
+    -webkit-user-select: none; user-select: none; touch-action: none; }
+  #game { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: pointer; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+"use strict";
+// ================= Haunted Hallway! 👻 — a spooky hallway runner for Amalia's Arcade =================
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+let W = 0, H = 0, DPR = 1, groundY = 0;
+
+const STATE = { TITLE: 0, PLAYING: 1, OVER: 2 };
+let state = STATE.TITLE;
+
+// ---------- sound effects (Web Audio, no files) ----------
+const sfx = (() => {
+  let ac = null;
+  function ensure() {
+    if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
+    if (ac && ac.state === "suspended") ac.resume();
+    return ac;
+  }
+  function tone(freq, delay, dur, type, vol, slideTo) {
+    const a = ensure(); if (!a) return;
+    const t = a.currentTime + delay;
+    const o = a.createOscillator(), g = a.createGain();
+    o.type = type || "sine";
+    o.frequency.setValueAtTime(freq, t);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(30, slideTo), t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol || 0.15, t + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(a.destination);
+    o.start(t); o.stop(t + dur + 0.05);
+  }
+  return {
+    unlock() { ensure(); },
+    jump() { tone(280, 0, 0.14, "square", 0.07, 720); },
+    ping() { tone(880, 0, 0.10, "sine", 0.14); tone(1318, 0.09, 0.16, "sine", 0.14); },
+    die()  { tone(300, 0, 0.35, "sawtooth", 0.11, 90); },
+    start(){ tone(523, 0, 0.10, "triangle", 0.13); tone(784, 0.08, 0.14, "triangle", 0.13); }
+  };
+})();
+
+// ---------- persistent best ----------
+const BEST_KEY = "hauntedHallway.best.v1";
+let best = 0;
+try { best = parseInt(localStorage.getItem(BEST_KEY) || "0", 10) || 0; } catch (e) {}
+function saveBest() { try { localStorage.setItem(BEST_KEY, String(best)); } catch (e) {} }
+
+// ---------- game state ----------
+const GRAV = 2900, JUMP_V = 1020;
+const ghost = { x: 84, y: 0, vy: 0, grounded: true, runPhase: 0, dead: false };
+let speed = 0, elapsed = 0, score = 0, prevScoreInt = 0, scorePop = 0;
+let obstacles = [];   // {x, w, h, kind}
+let spawnIn = 0;
+let ducking = false, keyDuck = false, duckUntil = 0;   // duck to slip under chandeliers
+let windows = [], sconces = [], pebbles = [];
+let particles = [];   // dust {x,y,vx,vy,life,maxLife,size}
+let shake = 0, newBest = false;
+let backBtn = null;
+
+const OB_KINDS = [
+  { w: 48, h: 26, kind: "crack" },
+  { w: 68, h: 26, kind: "crack" },
+  { w: 42, h: 38, kind: "pumpkin" },
+  { w: 56, h: 40, kind: "pumpkin" },
+  { w: 64, h: 0, kind: "chandelier" },   // hangs from ceiling: DUCK!
+];
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+  canvas.style.width = W + "px"; canvas.style.height = H + "px";
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  groundY = H - 130;
+  initScenery();
+}
+function initScenery() {
+  windows = [];
+  for (let i = 0; i < 4; i++) windows.push({ x: Math.random() * (W + 600) });
+  sconces = [];
+  for (let i = 0; i < 5; i++) sconces.push({ x: Math.random() * (W + 400), ph: Math.random() * 6 });
+  pebbles = [];
+  for (let i = 0; i < 26; i++) pebbles.push({ x: Math.random() * W, dx: Math.random() * 8, r: 2 + Math.random() * 3.5 });
+}
+window.addEventListener("resize", resize);
+
+// ---------- flow ----------
+function startGame() {
+  state = STATE.PLAYING;
+  elapsed = 0; score = 0; prevScoreInt = 0; scorePop = 0; newBest = false;
+  obstacles = []; particles = []; shake = 0;
+  spawnIn = 500;
+  ducking = false; keyDuck = false; duckUntil = 0;
+  ghost.y = groundY; ghost.vy = 0; ghost.grounded = true; ghost.dead = false; ghost.runPhase = 0;
+  sfx.start();
+}
+function endGame() {
+  state = STATE.OVER;
+  ghost.dead = true;
+  shake = 12;
+  sfx.die();
+  burst(ghost.x, ghost.y - 30, 10);
+  const s = Math.floor(score);
+  if (s > best) { best = s; newBest = s > 0; saveBest(); }
+}
+function hop() {
+  if (state !== STATE.PLAYING || !ghost.grounded) return;
+  ghost.grounded = false; ghost.vy = -JUMP_V;
+  sfx.jump();
+  dust(ghost.x - 14, groundY, 6);
+}
+function cutJump() { if (state === STATE.PLAYING && !ghost.grounded && ghost.vy < -380) ghost.vy = -380; }
+
+// ---------- input ----------
+function startDuck(timed) {
+  if (state !== STATE.PLAYING) return;
+  if (!ghost.grounded) { ghost.vy = Math.max(ghost.vy, 1500); return; }  // slam down out of the air
+  if (timed) duckUntil = Math.max(duckUntil, elapsed + 0.9);
+  else keyDuck = true;
+}
+window.addEventListener("keydown", e => {
+  sfx.unlock();
+  if (["ArrowUp", "ArrowDown", " "].includes(e.key)) e.preventDefault();
+  if (state !== STATE.PLAYING && (e.key === " " || e.key === "ArrowUp" || e.key === "Enter")) { startGame(); return; }
+  if ((e.key === " " || e.key === "ArrowUp") && !e.repeat) hop();
+  if ((e.key === "ArrowDown" || e.key === "s" || e.key === "S") && !e.repeat) startDuck(false);
+});
+window.addEventListener("keyup", e => {
+  if (e.key === " " || e.key === "ArrowUp") cutJump();
+  if (e.key === "ArrowDown" || e.key === "s" || e.key === "S") keyDuck = false;
+});
+let touchDuckBtn = null;
+const IS_TOUCH_DETECT = () => ("ontouchstart" in window) || (typeof navigator !== "undefined" && navigator.maxTouchPoints > 0);
+let IS_TOUCH = IS_TOUCH_DETECT();
+canvas.addEventListener("pointerdown", e => {
+  sfx.unlock();
+  if (hitBackButton(e)) { window.location.href = "../"; return; }
+  if (state !== STATE.PLAYING) { startGame(); return; }
+  if (hitDuckButton(e)) { startDuck(true); return; }
+  hop();
+});
+canvas.addEventListener("pointerup", cutJump);
+canvas.addEventListener("pointercancel", cutJump);
+
+// ---------- particles ----------
+function dust(x, y, n) {
+  for (let i = 0; i < n; i++) {
+    particles.push({ x: x + (Math.random() - 0.5) * 20, y: y - Math.random() * 6,
+      vx: -60 - Math.random() * 120, vy: -30 - Math.random() * 90,
+      life: 0.4 + Math.random() * 0.3, maxLife: 0.7, size: 2 + Math.random() * 3.5, color: "#d9a066" });
+  }
+}
+function burst(x, y, n) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 80 + Math.random() * 200;
+    particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 60,
+      life: 0.5 + Math.random() * 0.3, maxLife: 0.8, size: 2.5 + Math.random() * 3.5, color: "#8a5a28" });
+  }
+}
+
+// ---------- update ----------
+let lastT = 0;
+function update(now) {
+  const dt = Math.min(0.05, (now - lastT) / 1000 || 0.016);
+  lastT = now;
+
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 1100 * dt; p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+  if (shake > 0) shake = Math.max(0, shake - dt * 40);
+  if (scorePop > 0) scorePop = Math.max(0, scorePop - dt);
+
+  // windows + sconces only scroll while running (title screen stays still)
+
+  if (state !== STATE.PLAYING) return;
+  elapsed += dt;
+  speed = Math.min(330 + elapsed * 3.5, 750);   // gentle 2-minute ramp
+
+  // duck state: held key, or timed swipe-duck
+  ducking = keyDuck || elapsed < duckUntil;
+  if (!ghost.grounded) ducking = false;
+
+  // ghost physics
+  ghost.vy += GRAV * dt;
+  ghost.y += ghost.vy * dt;
+  if (ghost.y >= groundY) {
+    if (!ghost.grounded && ghost.vy > 500) dust(ghost.x, groundY, 5);
+    ghost.y = groundY; ghost.vy = 0; ghost.grounded = true;
+  }
+  if (ghost.grounded) ghost.runPhase += dt * (7 + speed / 90);
+
+  // scenery scroll
+  for (const wn of windows) { wn.x -= speed * 0.25 * dt; if (wn.x < -120) wn.x = W + 300 + Math.random() * 300; }
+  for (const sc of sconces) { sc.x -= speed * 0.45 * dt; if (sc.x < -60) { sc.x = W + 150 + Math.random() * 250; sc.ph = Math.random() * 6; } }
+  for (const p of pebbles) { p.x -= speed * dt; if (p.x < -20) { p.x = W + 10; p.dx = Math.random() * 8; } }
+
+  // spawn obstacles with fair gaps
+  spawnIn -= speed * dt;
+  if (spawnIn <= 0) {
+    const k = OB_KINDS[(Math.random() * OB_KINDS.length) | 0];
+    obstacles.push({ x: W + 60, w: k.w, h: k.h, kind: k.kind, seed: Math.random() * 10 });
+    spawnIn = 300 + Math.random() * 360 + speed * 0.5;   // reaction window shrinks as speed climbs
+  }
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    const o = obstacles[i];
+    o.x -= speed * dt;
+    if (o.x < -120) { obstacles.splice(i, 1); continue; }
+    // collision (forgiving boxes; chandeliers hang high — duck!)
+    const rx0 = ghost.x - 18, rx1 = ghost.x + 20;
+    const ry0 = ghost.y - (ducking ? 28 : 58), ry1 = ghost.y - 4;
+    const ox0 = o.x + 6, ox1 = o.x + o.w - 6;
+    let oy0, oy1;
+    if (o.kind === "chandelier") { oy0 = groundY - 122; oy1 = groundY - 52; }
+    else { oy0 = groundY - o.h + 6; oy1 = groundY - 2; }
+    if (rx0 < ox1 && rx1 > ox0 && ry0 < oy1 && ry1 > oy0) { endGame(); return; }
+  }
+
+  // score
+  const before = Math.floor(score);
+  score += speed * dt * 0.025;
+  const after = Math.floor(score);
+  if (Math.floor(after / 100) > Math.floor(before / 100)) { sfx.ping(); scorePop = 0.6; }
+}
+
+// ---------- drawing ----------
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function drawBackground() {
+  // haunted hallway walls
+  const wall = ctx.createLinearGradient(0, 0, 0, groundY);
+  wall.addColorStop(0, "#1c102e"); wall.addColorStop(0.75, "#31204c"); wall.addColorStop(1, "#3d2a5c");
+  ctx.fillStyle = wall; ctx.fillRect(0, 0, W, groundY + 2);
+  // damask-ish stripes (slow parallax)
+  ctx.fillStyle = "rgba(255,255,255,0.035)";
+  const woff = state === STATE.PLAYING ? (elapsed * speed * 0.25) % 140 : 0;
+  for (let x = -woff; x < W + 140; x += 140) ctx.fillRect(x, 0, 64, groundY);
+  // moonlit windows (slow parallax)
+  for (const wn of windows) drawWindow(wn.x);
+  // candle sconces with flickering flames
+  for (const s of sconces) drawSconce(s.x, s.ph + elapsed * 9);
+  // cobwebs in the top corners
+  drawWeb(10, 10, 1); drawWeb(W - 10, 10, -1);
+  // wooden floor with scrolling planks
+  ctx.fillStyle = "#4a3220"; ctx.fillRect(0, groundY, W, H - groundY);
+  ctx.fillStyle = "#33220f";
+  const foff = state === STATE.PLAYING ? (elapsed * speed) % 90 : 0;
+  for (let x = -foff; x < W + 90; x += 90) ctx.fillRect(x, groundY + 10, 4, H - groundY);
+  ctx.fillStyle = "#5d4028"; ctx.fillRect(0, groundY, W, 6);
+  // floor debris
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  for (const p of pebbles) {
+    ctx.beginPath(); ctx.ellipse(p.x, groundY + 26 + p.dx * 6, p.r, p.r * 0.6, 0, 0, Math.PI * 2); ctx.fill();
+  }
+}
+function drawWindow(x) {
+  const w = 90, h = 150;
+  ctx.save(); ctx.translate(x, 90);
+  ctx.fillStyle = "#120a20";
+  roundRect(-w/2 - 8, -8, w + 16, h + 16, 40); ctx.fill();
+  const mg = ctx.createLinearGradient(0, 0, 0, h);
+  mg.addColorStop(0, "#9fd8ef"); mg.addColorStop(1, "#5a7fb8");
+  ctx.fillStyle = mg;
+  roundRect(-w/2, 0, w, h, 36); ctx.fill();
+  ctx.fillStyle = "#fdf6d8";
+  ctx.beginPath(); ctx.arc(18, 34, 18, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = "#120a20"; ctx.lineWidth = 8;
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, h);
+  ctx.moveTo(-w/2, h/2); ctx.lineTo(w/2, h/2); ctx.stroke();
+  ctx.restore();
+}
+function drawSconce(x, ph) {
+  const y = groundY - 190;
+  ctx.save(); ctx.translate(x, y);
+  ctx.fillStyle = "#6b4a26";
+  ctx.fillRect(-4, 0, 8, 26);
+  ctx.fillStyle = "#f5e6c4";
+  roundRect(-7, -34, 14, 36, 6); ctx.fill();
+  const fl = 1 + Math.sin(ph) * 0.18 + Math.sin(ph * 2.7) * 0.08;
+  const g = ctx.createRadialGradient(0, -40, 4, 0, -40, 70);
+  g.addColorStop(0, "rgba(255,190,90,0.45)"); g.addColorStop(1, "rgba(255,190,90,0)");
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(0, -40, 70, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#ff9f2e";
+  ctx.beginPath(); ctx.ellipse(0, -44, 6, 10 * fl, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#ffe9a8";
+  ctx.beginPath(); ctx.ellipse(0, -42, 3, 5.5 * fl, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+function drawWeb(x, y, dir) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(dir, 1);
+  ctx.strokeStyle = "rgba(220,220,235,0.35)"; ctx.lineWidth = 1.5;
+  for (let i = 0; i < 4; i++) {
+    ctx.beginPath(); ctx.moveTo(0, 0);
+    ctx.lineTo(Math.cos(i * 0.5) * 70, Math.sin(i * 0.5) * 70); ctx.stroke();
+  }
+  for (let r = 18; r <= 66; r += 16) {
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 0.55); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawGhost() {
+  ctx.save();
+  ctx.translate(ghost.x, ghost.y);
+  if (shake > 0) ctx.translate((Math.random()-0.5)*shake, (Math.random()-0.5)*shake);
+  if (ghost.dead) ctx.rotate(0.1);
+  const squash = ducking ? 0.55 : 1;   // duck under chandeliers!
+  // shadow
+  const airH = Math.min(1, (groundY - ghost.y) / 220);
+  ctx.fillStyle = "rgba(0,0,0,0.4)";
+  ctx.beginPath(); ctx.ellipse(0, 5, 30 * (1 - airH * 0.45), 7, 0, 0, Math.PI*2); ctx.fill();
+  ctx.scale(1, squash);
+  const bob = ghost.grounded && state === STATE.PLAYING ? Math.sin(ghost.runPhase) * 2 : 0;
+  const airb = ghost.grounded ? 0 : 1;
+  // little feet peeking out
+  ctx.fillStyle = "#3a2b4d";
+  const fstep = ghost.grounded && state === STATE.PLAYING ? Math.sin(ghost.runPhase) * 4 : 0;
+  ctx.beginPath(); ctx.ellipse(-9, -3 + Math.max(0, fstep) * 0.4, 7, 5, 0, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(9, -3 + Math.max(0, -fstep) * 0.4, 7, 5, 0, 0, Math.PI*2); ctx.fill();
+  // sheet body with wavy hem
+  ctx.fillStyle = "#f2f0fa";
+  ctx.beginPath();
+  ctx.moveTo(-22, 0);
+  ctx.quadraticCurveTo(-25, -30, -16, -44 + bob);
+  ctx.quadraticCurveTo(-10, -58 + bob, 0, -58 + bob);
+  ctx.quadraticCurveTo(10, -58 + bob, 16, -44 + bob);
+  ctx.quadraticCurveTo(25, -30, 22, 0);
+  for (let i = 0; i < 4; i++) {
+    const x0 = 22 - i * 11;
+    ctx.quadraticCurveTo(x0 - 5.5, -9, x0 - 11, 0);
+  }
+  ctx.closePath(); ctx.fill();
+  // arms (up when airborne — whee!)
+  ctx.fillStyle = "#e6e2f5";
+  const ay = airb ? -46 + bob : -26 + bob;
+  ctx.beginPath(); ctx.ellipse(-22, ay, 6, 9, 0.5, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(22, ay, 6, 9, -0.5, 0, Math.PI*2); ctx.fill();
+  // rosy cheeks
+  ctx.fillStyle = "rgba(255,150,170,0.65)";
+  ctx.beginPath(); ctx.arc(-14, -32 + bob, 5, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(14, -32 + bob, 5, 0, Math.PI*2); ctx.fill();
+  // eyes (X when spooked)
+  const ey = -40 + bob;
+  if (ghost.dead) {
+    ctx.strokeStyle = "#1c1c22"; ctx.lineWidth = 2.6;
+    for (const ex of [-8, 8]) {
+      ctx.beginPath();
+      ctx.moveTo(ex - 4, ey - 4); ctx.lineTo(ex + 4, ey + 4);
+      ctx.moveTo(ex + 4, ey - 4); ctx.lineTo(ex - 4, ey + 4);
+      ctx.stroke();
+    }
+  } else {
+    ctx.fillStyle = "#1c1c22";
+    ctx.beginPath(); ctx.ellipse(-8, ey, 4.5, 6, 0, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(8, ey, 4.5, 6, 0, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath(); ctx.arc(-6.8, ey - 2, 1.4, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(9.2, ey - 2, 1.4, 0, Math.PI*2); ctx.fill();
+  }
+  // little "o" mouth
+  ctx.fillStyle = "#1c1c22";
+  ctx.beginPath(); ctx.ellipse(0, -28 + bob, 3.5, ghost.dead ? 5 : 4.5, 0, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+function drawObstacle(o) {
+  ctx.save();
+  if (o.kind === "crack") {
+    // spooky glowing floor crack — JUMP it!
+    const cxp = o.x + o.w / 2;
+    ctx.fillStyle = "#0a0512";
+    ctx.beginPath(); ctx.ellipse(cxp, groundY + 4, o.w / 2, 12, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "rgba(155,48,255,0.4)";
+    ctx.beginPath(); ctx.ellipse(cxp, groundY + 4, o.w / 2 - 9, 6, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#2c1240"; ctx.lineWidth = 3;
+    for (let i = 0; i < 6; i++) {
+      const txp = o.x + 6 + (o.w - 12) * (i / 5);
+      ctx.beginPath(); ctx.moveTo(txp, groundY - 1);
+      ctx.lineTo(txp + 4, groundY - 10 - ((i * 37 + o.seed * 10) % 9)); ctx.stroke();
+    }
+  } else if (o.kind === "chandelier") {
+    // hanging chandelier — DUCK under it!
+    const cxp = o.x + o.w / 2;
+    const g = ctx.createRadialGradient(cxp, groundY - 130, 6, cxp, groundY - 130, 95);
+    g.addColorStop(0, "rgba(255,190,90,0.32)"); g.addColorStop(1, "rgba(255,190,90,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(cxp, groundY - 130, 95, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#3a3a44"; ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.moveTo(cxp, 0); ctx.lineTo(cxp, groundY - 118); ctx.stroke();
+    ctx.strokeStyle = "#8a6a2f"; ctx.lineWidth = 7;
+    ctx.beginPath(); ctx.ellipse(cxp, groundY - 108, o.w / 2, 12, 0, 0, Math.PI * 2); ctx.stroke();
+    for (let i = -2; i <= 2; i++) {
+      const px = cxp + i * (o.w / 5);
+      ctx.fillStyle = "#f5e6c4"; ctx.fillRect(px - 4, groundY - 138, 8, 22);
+      const fl = 1 + Math.sin(elapsed * 11 + i * 1.7 + o.seed) * 0.2;
+      ctx.fillStyle = "#ff9f2e";
+      ctx.beginPath(); ctx.ellipse(px, groundY - 144, 4.5, 8 * fl, 0, 0, Math.PI * 2); ctx.fill();
+    }
+  } else if (o.kind === "pumpkin") {
+    // grinning jack-o'-lantern — JUMP it!
+    const cxp = o.x + o.w / 2, r = o.h / 2, cy = groundY - r;
+    const g = ctx.createRadialGradient(cxp, cy, 4, cxp, cy, o.w);
+    g.addColorStop(0, "rgba(255,150,50,0.35)"); g.addColorStop(1, "rgba(255,150,50,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(cxp, cy, o.w, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#e07b28";
+    ctx.beginPath(); ctx.ellipse(cxp, cy, o.w / 2, r, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#b85a18"; ctx.lineWidth = 3;
+    for (const dx of [-o.w / 6, 0, o.w / 6]) {
+      ctx.beginPath(); ctx.ellipse(cxp + dx, cy, o.w / 6, r - 3, 0, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.fillStyle = "#5e8f4e"; ctx.fillRect(cxp - 3, groundY - o.h - 9, 7, 11);
+    // spooky face
+    ctx.fillStyle = "#ffd23e";
+    const ey = cy - 8;
+    for (const ex of [-11, 11]) {
+      ctx.beginPath();
+      ctx.moveTo(cxp + ex - 7, ey + 6); ctx.lineTo(cxp + ex, ey - 6); ctx.lineTo(cxp + ex + 7, ey + 6);
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.beginPath();
+    const my = cy + 10;
+    ctx.moveTo(cxp - 16, my);
+    for (let i = 0; i < 4; i++) ctx.lineTo(cxp - 16 + (i + 0.5) * 8, my + (i % 2 === 0 ? -6 : 4));
+    ctx.lineTo(cxp + 16, my); ctx.lineTo(cxp + 16, my + 8); ctx.lineTo(cxp - 16, my + 8);
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawBackButton() {
+  const w = 122, h = 38, x = 12, y = 12;
+  backBtn = { x, y, w, h };
+  ctx.fillStyle = "rgba(20,10,30,0.62)";
+  roundRect(x, y, w, h, 19); ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 2;
+  roundRect(x, y, w, h, 19); ctx.stroke();
+  ctx.fillStyle = "#ffe9a8"; ctx.font = "700 17px -apple-system, sans-serif";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText("‹ Arcade", x + w / 2, y + h / 2 + 1);
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+}
+function hitBackButton(e) {
+  if (!backBtn) return false;
+  const x = e.clientX || 0, y = e.clientY || 0;
+  return x >= backBtn.x && x <= backBtn.x + backBtn.w && y >= backBtn.y && y <= backBtn.y + backBtn.h;
+}
+function drawDuckButton() {
+  if (!IS_TOUCH) { touchDuckBtn = null; return; }
+  const r = 40, x = W - 64, y = H - 84;
+  touchDuckBtn = { x: x - r, y: y - r, w: r * 2, h: r * 2 };
+  ctx.fillStyle = ducking ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.26)";
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.7)"; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = "#ffffff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.font = "800 26px -apple-system, sans-serif";
+  ctx.fillText("▼", x, y - 8);
+  ctx.font = "800 12px -apple-system, sans-serif";
+  ctx.fillText("DUCK", x, y + 16);
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+}
+function hitDuckButton(e) {
+  if (!touchDuckBtn) return false;
+  const x = e.clientX || 0, y = e.clientY || 0;
+  return x >= touchDuckBtn.x && x <= touchDuckBtn.x + touchDuckBtn.w &&
+         y >= touchDuckBtn.y && y <= touchDuckBtn.y + touchDuckBtn.h;
+}
+
+function drawHUD() {
+  ctx.textAlign = "right";
+  const pop = 1 + scorePop * 0.8;
+  ctx.fillStyle = "#ffe9a8";
+  ctx.font = "700 15px -apple-system, sans-serif";
+  ctx.fillText("BEST " + best, W - 16, 22);
+  ctx.save();
+  ctx.translate(W - 16, 46); ctx.scale(pop, pop); ctx.translate(-(W - 16), -46);
+  ctx.font = "800 30px -apple-system, sans-serif";
+  ctx.fillText(String(Math.floor(score)).padStart(5, "0"), W - 16, 46);
+  ctx.restore();
+  ctx.textAlign = "left";
+}
+
+function drawPanel(title, lines, accent) {
+  const w = Math.min(W - 60, 420), h = 120 + lines.length * 30;
+  const x = W / 2 - w / 2, y = H / 2 - h / 2;
+  ctx.fillStyle = "rgba(20,10,5,0.72)";
+  roundRect(x, y, w, h, 22); ctx.fill();
+  ctx.strokeStyle = accent; ctx.lineWidth = 4;
+  roundRect(x, y, w, h, 22); ctx.stroke();
+  ctx.textAlign = "center";
+  ctx.fillStyle = accent; ctx.font = "900 40px -apple-system, sans-serif";
+  ctx.fillText(title, W / 2, y + 62);
+  ctx.fillStyle = "#ffffff"; ctx.font = "700 19px -apple-system, sans-serif";
+  lines.forEach((ln, i) => ctx.fillText(ln, W / 2, y + 108 + i * 30));
+  ctx.textAlign = "left";
+}
+
+function draw() {
+  ctx.save();
+  drawBackground();
+  for (const o of obstacles) drawObstacle(o);
+  drawGhost();
+  drawParticles();
+  drawBackButton();
+  drawDuckButton();
+  if (state === STATE.PLAYING) drawHUD();
+  if (state === STATE.TITLE) {
+    drawPanel("HAUNTED HALLWAY!", [
+      "Jump the cracks, duck the chandeliers!",
+      "Tap / Space to jump — ▼ button or hold ↓ to duck.",
+      best > 0 ? ("Best: " + best) : "How far can you float?"
+    ], "#b366ff");
+  } else if (state === STATE.OVER) {
+    drawHUD();
+    drawPanel("SPOOKED!", [
+      "Score: " + Math.floor(score) + (newBest ? "  —  NEW BEST!" : ""),
+      "Best: " + best,
+      "Tap or press Space to float again"
+    ], "#ff5e78");
+  }
+  ctx.restore();
+}
+
+// ---------- main loop ----------
+function frame(now) {
+  update(now);
+  draw();
+  requestAnimationFrame(frame);
+}
+resize();
+ghost.y = groundY;
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
