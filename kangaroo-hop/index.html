@@ -177,7 +177,7 @@ function update(now) {
 
   if (state !== STATE.PLAYING) return;
   elapsed += dt;
-  speed = Math.min(330 + elapsed * 9, 760);
+  speed = Math.min(330 + elapsed * 3.5, 750);   // gentle 2-minute ramp
 
   // roo physics
   roo.vy += GRAV * dt;
@@ -197,7 +197,7 @@ function update(now) {
   if (spawnIn <= 0) {
     const k = OB_KINDS[(Math.random() * OB_KINDS.length) | 0];
     obstacles.push({ x: W + 60, w: k.w, h: k.h, kind: k.kind, seed: Math.random() * 10 });
-    spawnIn = 320 + Math.random() * 380 + speed * 0.55;
+    spawnIn = 300 + Math.random() * 360 + speed * 0.5;   // reaction window shrinks as speed climbs
   }
   for (let i = obstacles.length - 1; i >= 0; i--) {
     const o = obstacles[i];
