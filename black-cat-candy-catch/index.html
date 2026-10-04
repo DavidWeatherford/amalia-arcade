@@ -214,9 +214,10 @@ function drawFloaters() {
 
 // ---------- candy ----------
 const CANDY_KINDS = ["corn", "wrapped", "pop"];
-const MIN_LAND_GAP = 1.25;   // min seconds between candy landings (fairness)
+const MIN_LAND_GAP_START = 1.35, MIN_LAND_GAP_END = 0.9;   // fairness window shrinks as you survive
+function landGap() { return MIN_LAND_GAP_START - Math.min(elapsed * 0.004, MIN_LAND_GAP_START - MIN_LAND_GAP_END); }
 function nextVy() {
-  const speedBase = 70 + Math.min(elapsed * 2.5, 120);   // gentle ramp
+  const speedBase = 70 + Math.min(elapsed * 1.5, 180);   // gentle 2-minute ramp
   return speedBase * (0.75 + Math.random()*0.6);
 }
 function spawnCandy(vy) {
@@ -235,8 +236,9 @@ function spawnCandy(vy) {
 // Would a candy falling this fast land too close to another candy's landing?
 function spawnIsFair(vy) {
   const t = elapsed + ((H - 120) - (-30)) / vy;
+  const gap = landGap();
   for (const c of candies) {
-    if (Math.abs(c.landAt - t) < MIN_LAND_GAP) return false;
+    if (Math.abs(c.landAt - t) < gap) return false;
   }
   return true;
 }
@@ -322,7 +324,7 @@ function update(now) {
     const vy = nextVy();
     if (candies.length < 5 && spawnIsFair(vy)) {
       spawnCandy(vy);
-      spawnTimer = Math.max(0.45, 1.25 - elapsed * 0.01);
+      spawnTimer = Math.max(0.4, 1.25 - elapsed * 0.007);   // gently busier over 2 minutes
     } else {
       spawnTimer = 0.2;   // try again shortly
     }
