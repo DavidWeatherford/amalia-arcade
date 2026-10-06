@@ -72,6 +72,7 @@ let backBtn = null;
 const OB_KINDS = [
   { w: 44, h: 66, kind: "statue" },
   { w: 56, h: 66, kind: "statue" },
+  { w: 48, h: 86, kind: "statue" },   // tall — needs a committed jump
   { w: 42, h: 38, kind: "pumpkin" },
   { w: 56, h: 40, kind: "pumpkin" },
 ];
@@ -174,7 +175,7 @@ function update(now) {
 
   if (state !== STATE.PLAYING) return;
   elapsed += dt;
-  speed = Math.min(340 + elapsed * 7.2, 780);   // ramps to super-difficult by ~60s
+  speed = Math.min(340 + elapsed * 10, 1050);   // keeps getting faster well past 60s
 
   // ghost physics
   ghost.vy += GRAV * dt;
@@ -195,8 +196,13 @@ function update(now) {
   if (spawnIn <= 0) {
     const k = OB_KINDS[(Math.random() * OB_KINDS.length) | 0];
     obstacles.push({ x: W + 60, w: k.w, h: k.h, kind: k.kind, seed: Math.random() * 10 });
-    const ramp = Math.min(elapsed / 60, 1);   // obstacles arrive more often as the run goes on
-    spawnIn = (380 + Math.random() * 320 + speed * 0.7) * (1 - 0.22 * ramp);   // always a fair jump window
+    // gap between obstacles, in seconds: 2.0s -> 0.82s by 60s, then keeps tightening (floor 0.75s)
+    const ramp = Math.min(elapsed / 60, 1);
+    let gapT = 2.0 - 1.18 * ramp;
+    if (elapsed > 60) gapT = Math.max(0.75, gapT - (elapsed - 60) * 0.005);
+    // fairness floor: never less than one full jump + obstacle width + margin
+    const fairPx = speed * 0.70 + 120;
+    spawnIn = Math.max(gapT * speed * (0.9 + Math.random() * 0.25), fairPx);
   }
   for (let i = obstacles.length - 1; i >= 0; i--) {
     const o = obstacles[i];
@@ -366,7 +372,9 @@ function drawObstacle(o) {
   ctx.save();
   if (o.kind === "statue") {
     // spooky gargoyle statue on a stone pedestal — JUMP it!
+    ctx.save();
     const cxp = o.x + o.w / 2, base = groundY;
+    ctx.translate(cxp, base); ctx.scale(1, o.h / 66); ctx.translate(-cxp, -base);
     // pedestal
     ctx.fillStyle = "#3f3f49";
     ctx.fillRect(cxp - o.w / 2 + 2, base - 18, o.w - 4, 18);
@@ -399,6 +407,7 @@ function drawObstacle(o) {
     // stone crack
     ctx.strokeStyle = "#3a3a44"; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(cxp - 7, base - 32); ctx.lineTo(cxp - 1, base - 24); ctx.stroke();
+    ctx.restore();
   } else if (o.kind === "pumpkin") {
     // grinning jack-o'-lantern — JUMP it!
     const cxp = o.x + o.w / 2, r = o.h / 2, cy = groundY - r;
