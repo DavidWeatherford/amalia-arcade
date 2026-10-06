@@ -60,12 +60,18 @@ let best = 0;
 try { best = parseInt(localStorage.getItem(BEST_KEY) || "0", 10) || 0; } catch (e) {}
 function saveBest() { try { localStorage.setItem(BEST_KEY, String(best)); } catch (e) {} }
 
-// ---------- difficulty (gentle 2-minute ramp) ----------
+// ---------- difficulty (ramps to super-difficult by ~60s) ----------
 let elapsed = 0;
-function ramp() { return Math.min(elapsed / 120, 1); }
-function spawnInterval() { return 1.15 - 0.60 * ramp(); }   // 1.15s -> 0.55s
-function ghostUpTime()   { return 1.50 - 0.75 * ramp(); }   // 1.50s -> 0.75s
-function batProb()       { return 0.10 + 0.15 * ramp(); }   // 10%  -> 25%
+function ramp() { return Math.min(elapsed / 60, 1); }
+function spawnInterval() { return 1.10 - 0.75 * ramp(); }   // 1.10s -> 0.35s
+function ghostUpTime()   { return 1.50 - 0.90 * ramp(); }   // 1.50s -> 0.60s
+function batProb()       { return 0.10 + 0.20 * ramp(); }   // 10%  -> 30%
+function multiSpawn() {  // extra ghosts per tick late in the run
+  let n = 1;
+  if (ramp() > 0.55 && Math.random() < 0.5) n = 2;
+  if (ramp() > 0.85 && Math.random() < 0.35) n = 3;
+  return n;
+}
 
 // ---------- game state ----------
 const RISE_T = 0.18, FALL_T = 0.20, BONK_T = 0.45;
@@ -249,7 +255,8 @@ function update(now) {
   if (spawnTimer <= 0) {
     const free = mounds.filter(m => !m.occupied);
     if (free.length) {
-      spawnPop(free[(Math.random() * free.length) | 0]);
+      const n = Math.min(multiSpawn(), free.length);
+      for (let i = 0; i < n; i++) spawnPop(free.splice((Math.random() * free.length) | 0, 1)[0]);
       spawnTimer = spawnInterval() * (0.85 + Math.random() * 0.3);
     } else {
       spawnTimer = 0.15;
