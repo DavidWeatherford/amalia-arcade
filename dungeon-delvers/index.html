@@ -153,10 +153,10 @@ const BESTIARY={
     behavior:"shooter", r:15, color:"#cfc39a",
     desc:"Stands its ground and fires bones." },
   slime:{ name:"Slime", hp:70, speed:70, dmg:6, range:40, atkCd:1.8, xp:16,
-    behavior:"chaser", r:14, color:"#5fd35f", split:true,
+    behavior:"chaser", r:14, color:"#f0a050", split:true,
     desc:"Pops into two mini-slimes!" },
   mini_slime:{ name:"Mini Slime", hp:22, speed:105, dmg:4, range:36, atkCd:1.4, xp:6,
-    behavior:"chaser", r:10, color:"#7fe87f",
+    behavior:"chaser", r:10, color:"#f7b46a",
     desc:"A wobbly little blob." },
   wisp:{ name:"Wisp", hp:30, speed:155, dmg:5, range:40, atkCd:1.2, xp:12,
     behavior:"chaser", r:12, color:"#9fd8ff",
@@ -168,7 +168,7 @@ const TRAPS={
 const BOSSES={
   crypt_keeper:{ name:"The Skeleton King", hp:980, speed:62, dmg:14, r:30, color:"#5e2f8f", xp:150,
     desc:"Slams the ground and calls his imps." },
-  slime_king:{ name:"The Slime King", hp:850, speed:55, dmg:12, r:34, color:"#5fd35f", xp:150,
+  slime_king:{ name:"The Slime King", hp:850, speed:55, dmg:12, r:34, color:"#f0a050", xp:150,
     desc:"Splash-slams the ground and splits off slimes." },
 };
 let runBossKey="crypt_keeper"; // B: picked randomly per run in startRun
@@ -448,7 +448,7 @@ function dealDamage(src,dst,amount){
         for(const s of [-1,1]){
           spawnMonsterAt("mini_slime",dst.x+s*22,dst.y+rand(-8,8));
         }
-        burst(dst.x,dst.y,12,"#5fd35f");
+        burst(dst.x,dst.y,12,"#f0a050");
         addFloater(dst.x,dst.y-34,"SPLIT!","#7dff9a",16); sfx.level();
       }
       monsters.splice(monsters.indexOf(dst),1);
@@ -679,14 +679,14 @@ function monsterAI(m,dt){
 }
 function bossAI(m,dt,d){
   const slime=m.bossType==="slime_king";
-  const tcol=slime?"#5fd35f":"#ff3c50";
+  const tcol=slime?"#f0a050":"#ff3c50";
   m.slamT-=dt; m.summonT-=dt;
   if(m.telegraph){
     m.telegraph.t-=dt;
     if(m.telegraph.t<=0){
       const {x,y,r}=m.telegraph;
-      burst(x,y,20,slime?"#7dff9a":"#ff5e78"); sfx.boom();
-      addBoom(x,y,r,slime?"green":"orange"); shake=Math.max(shake,5);
+      burst(x,y,20,slime?"#ffd76b":"#ff5e78"); sfx.boom();
+      addBoom(x,y,r); shake=Math.max(shake,5);
       for(const h of party)if(!h.downed&&dist(h.x,h.y,x,y)<r)dealDamage(m,h,m.dmg*1.6);
       m.telegraph=null;
     }
@@ -1111,7 +1111,7 @@ function drawTelegraphs(){
   for(const m of monsters){
     if(m.telegraph&&tileVisible(Math.floor(m.x/TILE),Math.floor(m.y/TILE))){
       const t=m.telegraph, tc=t.col||"#ff3c50";
-      const glow=tc==="#5fd35f"?"95,211,95":"255,60,80";
+      const glow=tc==="#f0a050"?"240,160,80":"255,60,80";
       ctx.fillStyle="rgba("+glow+","+(0.25+0.2*Math.sin(elapsed*10)).toFixed(2)+")";
       ctx.beginPath(); ctx.arc(t.x-cam.x,t.y-cam.y,t.r,0,Math.PI*2); ctx.fill();
       ctx.strokeStyle=tc; ctx.lineWidth=3;
