@@ -146,29 +146,29 @@ function sprFrame(name,frame,sx,sy,size){
 }
 
 const BESTIARY={
-  crypt_imp:{ name:"Crypt Imp", hp:46, speed:110, dmg:5, range:44, atkCd:1.6, xp:14,
+  crypt_imp:{ name:"Crypt Imp", hp:140, speed:110, dmg:5, range:44, atkCd:1.6, xp:35,
     behavior:"chaser", r:14, color:"#7a5fa8",
     desc:"Flutters straight at you." },
-  skeleton_archer:{ name:"Skeleton Archer", hp:62, speed:80, dmg:7, range:300, atkCd:3.0, xp:20,
+  skeleton_archer:{ name:"Skeleton Archer", hp:160, speed:80, dmg:7, range:300, atkCd:3.0, xp:50,
     behavior:"shooter", r:15, color:"#cfc39a",
     desc:"Stands its ground and fires bones." },
-  slime:{ name:"Slime", hp:70, speed:70, dmg:6, range:40, atkCd:1.8, xp:16,
+  slime:{ name:"Slime", hp:170, speed:70, dmg:6, range:40, atkCd:1.8, xp:40,
     behavior:"chaser", r:14, color:"#f0a050", split:true,
     desc:"Pops into two mini-slimes!" },
-  mini_slime:{ name:"Mini Slime", hp:22, speed:105, dmg:4, range:36, atkCd:1.4, xp:6,
+  mini_slime:{ name:"Mini Slime", hp:55, speed:105, dmg:4, range:36, atkCd:1.4, xp:14,
     behavior:"chaser", r:10, color:"#f7b46a",
     desc:"A wobbly little blob." },
-  wisp:{ name:"Wisp", hp:30, speed:155, dmg:5, range:40, atkCd:1.2, xp:12,
+  wisp:{ name:"Wisp", hp:120, speed:155, dmg:5, range:40, atkCd:1.2, xp:30,
     behavior:"chaser", r:12, color:"#9fd8ff",
     desc:"Fast and spooky. Barely there." },
 };
 const TRAPS={
-  spikes:{ name:"Spike Trap", dmg:10, desc:"Telegraphed floor spikes." },
+  spikes:{ name:"Spike Trap", dmg:25, desc:"Telegraphed floor spikes." },
 };
 const BOSSES={
-  crypt_keeper:{ name:"The Skeleton King", hp:980, speed:62, dmg:14, r:30, color:"#5e2f8f", xp:150,
+  crypt_keeper:{ name:"The Skeleton King", hp:2000, speed:62, dmg:12, r:30, color:"#5e2f8f", xp:350,
     desc:"Slams the ground and calls his imps." },
-  slime_king:{ name:"The Slime King", hp:850, speed:55, dmg:12, r:34, color:"#f0a050", xp:150,
+  slime_king:{ name:"The Slime King", hp:1800, speed:55, dmg:10, r:34, color:"#f0a050", xp:350,
     desc:"Splash-slams the ground and splits off slimes." },
 };
 let runBossKey="crypt_keeper"; // B: picked randomly per run in startRun
@@ -406,6 +406,8 @@ function addFloater(x,y,text,color,size){
 }
 function addSlash(x,y,angle,color){ effects.push({kind:"slash",x,y,angle,color:color||"#ffe9a8",t:0,life:0.3}); }
 function addHit(x,y){ effects.push({kind:"hit",x,y,t:0,life:0.18}); }
+function addFlash(x,y){ effects.push({kind:"flash",x,y,t:0,life:0.3}); }
+function addBeam(x,y){ effects.push({kind:"beam",x,y,t:0,life:0.7}); }
 function addBoom(x,y,r,col){ effects.push({kind:"boom",x,y,r:r||70,col:col||"orange",t:0,life:0.35}); }
 function addScorch(x,y,r){ effects.push({kind:"scorch",x,y,r:r||44,t:0,life:5}); }
 function addHealRing(x,y){ effects.push({kind:"healring",x,y,t:0,life:0.6}); }
@@ -436,6 +438,7 @@ function dealDamage(src,dst,amount){
       if(party.every(h=>h.downed)){ state="lose"; }
     } else {
       kills++; sfx.die(); hitstop=Math.max(hitstop,0.06);
+      for(let i=0;i<4;i++)particles.push({x:dst.x+rand(-8,8),y:dst.y-10,vx:rand(-25,25),vy:rand(-95,-45),t:0,life:rand(0.5,0.9),color:choice(["#bfe9ff","#e8f7ff","#9fd8ff"])});
       burst(dst.x,dst.y,14,"#c86bff");
       gainXP(dst.xp);
       maybeDropLoot(dst);
@@ -482,7 +485,7 @@ function gainXP(n){
     while(h.xp>=h.xpNext){
       h.xp-=h.xpNext; h.level++; h.xpNext=Math.round(h.xpNext*1.5);
       const st=heroStats(h); h.hp=st.maxhp;
-      addFloater(h.x,h.y-34-i*24,"LEVEL "+h.level+"!","#ffe9a8",20); sfx.level();
+      addFloater(h.x,h.y-34-i*24,"LEVEL "+h.level+"!","#ffe9a8",20); sfx.level(); addBeam(h.x,h.y);
       burst(h.x,h.y,16,"#ffe9a8");
     }
   }
@@ -512,7 +515,7 @@ function useAbility(h,tx,ty){
   if(h.cls==="warrior"){
     h.shieldT=5; h.abilityCd=14;
     for(const m of monsters){ m.threat[h.cls]=(m.threat[h.cls]||0)+150; retarget(m); }
-    addFloater(h.x,h.y-36,"SHIELD WALL!","#4a90d9",18); sfx.boom(); return true;
+    addFloater(h.x,h.y-36,"SHIELD WALL!","#4a90d9",18); sfx.boom(); addFlash(h.x,h.y-16); return true;
   } else if(h.cls==="mage"){
     if(tx===undefined)return "target";
     h.abilityCd=9;
@@ -520,11 +523,11 @@ function useAbility(h,tx,ty){
     const a=Math.atan2(ty-h.y,tx-h.x);
     projectiles.push({x:h.x,y:h.y,tx,ty,vx:Math.cos(a)*520,vy:Math.sin(a)*520,r:8,
       dmg:heroStats(h).atk*2.2,friendly:true,aoe:90,color:"#ff9f2e",from:h,kind:"fireball"});
-    sfx.shoot(); return true;
+    sfx.shoot(); addFlash(h.x,h.y-16); return true;
   } else if(h.cls==="cleric"){
     h.abilityCd=12;
     for(const p of party)healTarget(h,p,35+h.level*6);
-    addFloater(h.x,h.y-36,"HEAL BURST!","#7dff9a",18); return true;
+    addFloater(h.x,h.y-36,"HEAL BURST!","#7dff9a",18); addFlash(h.x,h.y-16); return true;
   } else if(h.cls==="ranger"){
     if(tx===undefined)return "target";
     h.abilityCd=10;
@@ -532,7 +535,7 @@ function useAbility(h,tx,ty){
     for(const off of [-0.22,0,0.22])
       projectiles.push({x:h.x,y:h.y,vx:Math.cos(a+off)*560,vy:Math.sin(a+off)*560,r:6,
         dmg:atk,friendly:true,aoe:0,color:"#6bff9e",from:h,kind:"arrow"});
-    addFloater(h.x,h.y-36,"MULTI-SHOT!","#6bff9e",18); sfx.shoot(); return true;
+    addFloater(h.x,h.y-36,"MULTI-SHOT!","#6bff9e",18); sfx.shoot(); addFlash(h.x,h.y-16); return true;
   }
 }
 // ================= MOVEMENT & AI (free steering, no grid) =================
@@ -551,8 +554,14 @@ function circleHitsWall(x,y,r){
 }
 // steer straight at the target, sliding along walls; returns true when arrived
 function steerMove(e,tx,ty,dt){
+  // detour override: swing around an obstacle, then resume
+  if(e.detour){
+    e.detour.t-=dt;
+    if(Math.hypot(e.detour.x-e.x,e.detour.y-e.y)<12||e.detour.t<=0)e.detour=null;
+    else { tx=e.detour.x; ty=e.detour.y; }
+  }
   const dx=tx-e.x, dy=ty-e.y, d=Math.hypot(dx,dy);
-  if(d<6){ e.moving=false; e.moveT=null; return true; }
+  if(d<6){ e.moving=false; e.moveT=null; e.detour=null; return true; }
   e.face=Math.atan2(dy,dx);
   const step=Math.min(e.speed*dt,d), ux=dx/d, uy=dy/d, rad=e.r*0.7;
   const px=e.x, py=e.y;
@@ -567,12 +576,41 @@ function steerMove(e,tx,ty,dt){
   const moved=Math.hypot(e.x-px,e.y-py);
   e.moving=moved>0.4;
   e.stuckT=(e.stuckT||0)+dt;
-  if(moved>step*0.3)e.stuckT=0;
-  else if(e.stuckT>0.6){ e.slideSign=-(e.slideSign||1); e.stuckT=0; }
+  if(moved>step*0.3){ e.stuckT=0; e.stuckN=0; }
+  else if(e.stuckT>0.45){
+    e.stuckT=0; e.stuckN=(e.stuckN||0)+1; e.slideSign=-(e.slideSign||1);
+    if(e.stuckN>=2&&!e.detour){ // truly wedged: swing wide around it
+      e.stuckN=0;
+      const s=e.slideSign;
+      e.detour={x:e.x-uy*150*s, y:e.y+ux*150*s, t:1.4};
+    }
+  }
   return false;
 }
 function orderMove(e,tx,ty){
   e.moveT={x:tx,y:ty}; // NOTE: does not clear atkTarget (A0 indicators); callers clear explicitly
+}
+// gentle repulsion so fighters surround instead of stacking
+function separate(list,minD){
+  for(let i=0;i<list.length;i++)for(let j=i+1;j<list.length;j++){
+    const a=list[i],b=list[j];
+    if(a.downed||b.downed)continue;
+    const dx=b.x-a.x, dy=b.y-a.y, d=Math.hypot(dx,dy);
+    if(d>0.01&&d<minD){
+      const push=(minD-d)/2, ux=dx/d, uy=dy/d;
+      if(!circleHitsWall(a.x-ux*push,a.y-uy*push,a.r*0.7)){a.x-=ux*push;a.y-=uy*push;}
+      if(!circleHitsWall(b.x+ux*push,b.y+uy*push,b.r*0.7)){b.x+=ux*push;b.y+=uy*push;}
+    }
+  }
+}
+// nearest walkable pixel to (x,y), spiral search
+function nearestFloor(x,y){
+  if(tileAtTx(Math.floor(x/TILE),Math.floor(y/TILE))!==0)return{x,y};
+  for(let r=1;r<9;r++)for(let a=0;a<12;a++){
+    const nx=x+Math.cos(a/12*Math.PI*2)*r*TILE*0.5, ny=y+Math.sin(a/12*Math.PI*2)*r*TILE*0.5;
+    if(tileAtTx(Math.floor(nx/TILE),Math.floor(ny/TILE))!==0)return{x:nx,y:ny};
+  }
+  return{x,y};
 }
 function basicAttack(att,dst){
   const st=att.kind==="hero"?heroStats(att):{atk:att.dmg};
@@ -633,7 +671,7 @@ function npcAI(h,dt){
         if(bc>=2&&dist(h.x,h.y,bx,by)<560){ useAbility(h,bx,by); return; }
       }
       if(nd>h.range*0.8)orderMove(h,nm.x,nm.y);
-      else if(nd<h.range*0.4)orderMove(h,h.x+(h.x-nm.x),h.y+(h.y-nm.y)); // kite
+      else if(nd<h.range*0.4){ const kp=nearestFloor(h.x+(h.x-nm.x),h.y+(h.y-nm.y)); orderMove(h,kp.x,kp.y); } // kite
       else { h.moveT=null; if(h.atkT<=0)basicAttack(h,nm); h.moving=false; }
       return;
     }
@@ -653,7 +691,7 @@ function hpFrac(h){ const s=heroStats(h); return h.hp/s.maxhp; }
 function followAnchor(h){
   const a=h.anchor||h;
   const d=dist(h.x,h.y,a.x,a.y);
-  if(d>130&&!h.moveT)orderMove(h,a.x+rand(-60,60),a.y+rand(-60,60));
+  if(d>130&&!h.moveT){ const fp=nearestFloor(a.x+rand(-60,60),a.y+rand(-60,60)); orderMove(h,fp.x,fp.y); }
 }
 // --- monster AI ---
 function monsterAI(m,dt){
@@ -837,6 +875,7 @@ function update(dt){
       if(dist(h.x,h.y,l.x,l.y)<34){ pickupLoot(h,l); loots.splice(i,1); } }
   }
   for(const m of monsters){ m.atkT-=dt; m.hitT-=dt; m.wob+=dt*5; if(m.lunge)m.lunge.t+=dt; if(!m.target||m.target.downed)retarget(m); monsterAI(m,dt); }
+  separate(party,46); separate(monsters,40);
   // projectiles
   for(let i=projectiles.length-1;i>=0;i--){ const p=projectiles[i];
     // homing: friendly bolts track their target
@@ -849,6 +888,7 @@ function update(dt){
       p.vx=Math.cos(na)*sp; p.vy=Math.sin(na)*sp;
     }
     if(p.kind==="fireball")particles.push({x:p.x+rand(-5,5),y:p.y+rand(-5,5),vx:rand(-50,50),vy:rand(-60,10),t:0,life:rand(0.25,0.45),color:choice(["#ff9f2e","#ff6b2e","#ffd76b"])});
+    else if(p.kind==="bolt"&&p.friendly&&rng()<0.6)particles.push({x:p.x,y:p.y,vx:rand(-25,25),vy:rand(-25,25),t:0,life:0.28,color:choice(["#cfe6ff","#e8d4ff"])});
     else if(p.kind==="bolt"||p.kind==="arrow")particles.push({x:p.x,y:p.y,vx:rand(-15,15),vy:rand(-15,15),t:0,life:0.2,color:p.color});
     p.x+=p.vx*dt; p.y+=p.vy*dt; p.life=(p.life||3)-dt;
     let hit=false;
@@ -1139,7 +1179,9 @@ function drawHero(h){
   }
   const bob=moving?Math.abs(Math.sin(elapsed*9+h.wob))*3:0;
   const pop=h.hitT>0?1+0.15*(h.hitT/0.15):1; // F: squash-and-stretch on hit
-  ctx.save(); ctx.translate(x,y+16-bob); ctx.scale(pop,2-pop); ctx.translate(-x,-(y+16-bob));
+  ctx.save(); ctx.translate(x,y+16-bob); ctx.scale(pop,2-pop);
+  if(moving)ctx.rotate(flip?-0.09:0.09); // lean into the run
+  ctx.translate(-x,-(y+16-bob));
   if(!spr2(CLASS_SPR[h.cls],x,y+16-bob,64,flip)){
     // fallback while sheet loads
     ctx.fillStyle=h.color; ctx.beginPath(); ctx.arc(x,y,15,0,Math.PI*2); ctx.fill();
@@ -1168,7 +1210,9 @@ function drawMonster(m){
   ctx.fillStyle="rgba(0,0,0,0.35)";
   ctx.beginPath(); ctx.ellipse(x,y+R*0.75,R,R*0.35,0,0,Math.PI*2); ctx.fill();
   const mpop=m.hitT>0?1+0.15*(m.hitT/0.15):1; // F: squash-and-stretch on hit
-  ctx.save(); ctx.translate(x,y); ctx.scale(mpop,2-mpop); ctx.translate(-x,-y);
+  ctx.save(); ctx.translate(x,y); ctx.scale(mpop,2-mpop);
+  if(m.moving)ctx.rotate(Math.cos(m.face)<0?-0.09:0.09);
+  ctx.translate(-x,-y);
   let drawn=false;
   const MSPR={crypt_imp:"mon_imp",skeleton_archer:"mon_archer",slime:"mon_slime",mini_slime:"mon_slime",wisp:"mon_ghost"};
   if(m.elite){
@@ -1276,6 +1320,18 @@ function drawEffects(){
       ctx.beginPath(); ctx.arc(x,y,22*(1-p)+7,0,Math.PI*2); ctx.fill();
       ctx.strokeStyle="#fff"; ctx.lineWidth=3;
       ctx.beginPath(); ctx.arc(x,y,10+p*34,0,Math.PI*2); ctx.stroke();
+      ctx.globalAlpha=1;
+    } else if(f.kind==="flash"){
+      ctx.globalAlpha=0.7*(1-p);
+      const g=ctx.createRadialGradient(x,y,4,x,y,46);
+      g.addColorStop(0,"rgba(255,255,255,0.9)"); g.addColorStop(1,"rgba(255,255,255,0)");
+      ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,46,0,Math.PI*2); ctx.fill();
+      ctx.globalAlpha=1;
+    } else if(f.kind==="beam"){
+      ctx.globalAlpha=0.8*(1-p);
+      const g=ctx.createLinearGradient(0,y-150,0,y);
+      g.addColorStop(0,"rgba(255,233,168,0)"); g.addColorStop(1,"rgba(255,233,168,0.85)");
+      ctx.fillStyle=g; ctx.fillRect(x-16,y-150,32,150);
       ctx.globalAlpha=1;
     } else if(f.kind==="boom"){
       const grn=f.col==="green";
