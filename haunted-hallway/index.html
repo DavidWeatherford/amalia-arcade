@@ -64,18 +64,16 @@ const ghost = { x: 84, y: 0, vy: 0, grounded: true, runPhase: 0, dead: false };
 let speed = 0, elapsed = 0, score = 0, prevScoreInt = 0, scorePop = 0;
 let obstacles = [];   // {x, w, h, kind}
 let spawnIn = 0;
-let ducking = false, keyDuck = false, duckUntil = 0;   // duck to slip under chandeliers
 let windows = [], sconces = [], pebbles = [];
 let particles = [];   // dust {x,y,vx,vy,life,maxLife,size}
 let shake = 0, newBest = false;
 let backBtn = null;
 
 const OB_KINDS = [
-  { w: 56, h: 26, kind: "crack" },
-  { w: 80, h: 26, kind: "crack" },
+  { w: 44, h: 66, kind: "statue" },
+  { w: 56, h: 66, kind: "statue" },
   { w: 42, h: 38, kind: "pumpkin" },
   { w: 56, h: 40, kind: "pumpkin" },
-  { w: 64, h: 0, kind: "chandelier" },   // hangs HIGH: DUCK only!
 ];
 
 function resize() {
@@ -103,7 +101,6 @@ function startGame() {
   elapsed = 0; score = 0; prevScoreInt = 0; scorePop = 0; newBest = false;
   obstacles = []; particles = []; shake = 0;
   spawnIn = 500;
-  ducking = false; keyDuck = false; duckUntil = 0;
   ghost.y = groundY; ghost.vy = 0; ghost.grounded = true; ghost.dead = false; ghost.runPhase = 0;
   sfx.start();
 }
@@ -125,31 +122,19 @@ function hop() {
 function cutJump() { if (state === STATE.PLAYING && !ghost.grounded && ghost.vy < -380) ghost.vy = -380; }
 
 // ---------- input ----------
-function startDuck(timed) {
-  if (state !== STATE.PLAYING) return;
-  if (!ghost.grounded) { ghost.vy = Math.max(ghost.vy, 1500); return; }  // slam down out of the air
-  if (timed) duckUntil = Math.max(duckUntil, elapsed + 0.9);
-  else keyDuck = true;
-}
 window.addEventListener("keydown", e => {
   sfx.unlock();
   if (["ArrowUp", "ArrowDown", " "].includes(e.key)) e.preventDefault();
   if (state !== STATE.PLAYING && (e.key === " " || e.key === "ArrowUp" || e.key === "Enter")) { startGame(); return; }
   if ((e.key === " " || e.key === "ArrowUp") && !e.repeat) hop();
-  if ((e.key === "ArrowDown" || e.key === "s" || e.key === "S") && !e.repeat) startDuck(false);
 });
 window.addEventListener("keyup", e => {
   if (e.key === " " || e.key === "ArrowUp") cutJump();
-  if (e.key === "ArrowDown" || e.key === "s" || e.key === "S") keyDuck = false;
 });
-let touchDuckBtn = null;
-const IS_TOUCH_DETECT = () => ("ontouchstart" in window) || (typeof navigator !== "undefined" && navigator.maxTouchPoints > 0);
-let IS_TOUCH = IS_TOUCH_DETECT();
 canvas.addEventListener("pointerdown", e => {
   sfx.unlock();
   if (hitBackButton(e)) { window.location.href = "../"; return; }
   if (state !== STATE.PLAYING) { startGame(); return; }
-  if (hitDuckButton(e)) { startDuck(true); return; }
   hop();
 });
 canvas.addEventListener("pointerup", cutJump);
@@ -191,10 +176,6 @@ function update(now) {
   elapsed += dt;
   speed = Math.min(340 + elapsed * 7.2, 780);   // ramps to super-difficult by ~60s
 
-  // duck state: held key, or timed swipe-duck
-  ducking = keyDuck || elapsed < duckUntil;
-  if (!ghost.grounded) ducking = false;
-
   // ghost physics
   ghost.vy += GRAV * dt;
   ghost.y += ghost.vy * dt;
@@ -214,19 +195,18 @@ function update(now) {
   if (spawnIn <= 0) {
     const k = OB_KINDS[(Math.random() * OB_KINDS.length) | 0];
     obstacles.push({ x: W + 60, w: k.w, h: k.h, kind: k.kind, seed: Math.random() * 10 });
-    spawnIn = 420 + Math.random() * 380 + speed * 0.75;   // fair gaps: always room to land a jump or finish a duck
+    const ramp = Math.min(elapsed / 60, 1);   // obstacles arrive more often as the run goes on
+    spawnIn = (380 + Math.random() * 320 + speed * 0.7) * (1 - 0.22 * ramp);   // always a fair jump window
   }
   for (let i = obstacles.length - 1; i >= 0; i--) {
     const o = obstacles[i];
     o.x -= speed * dt;
     if (o.x < -120) { obstacles.splice(i, 1); continue; }
-    // collision (forgiving boxes; chandeliers hang high — duck!)
+    // collision (forgiving boxes — everything is jumpable)
     const rx0 = ghost.x - 18, rx1 = ghost.x + 20;
-    const ry0 = ghost.y - (ducking ? 28 : 58), ry1 = ghost.y - 4;
+    const ry0 = ghost.y - 58, ry1 = ghost.y - 4;
     const ox0 = o.x + 6, ox1 = o.x + o.w - 6;
-    let oy0, oy1;
-    if (o.kind === "chandelier") { oy0 = groundY - 205; oy1 = groundY - 70; }  // hangs HIGH: duck only, can't jump over
-    else { oy0 = groundY - o.h + 6; oy1 = groundY - 2; }
+    const oy0 = groundY - o.h + 6, oy1 = groundY - 2;
     if (rx0 < ox1 && rx1 > ox0 && ry0 < oy1 && ry1 > oy0) { endGame(); return; }
   }
 
@@ -325,12 +305,10 @@ function drawGhost() {
   ctx.translate(ghost.x, ghost.y);
   if (shake > 0) ctx.translate((Math.random()-0.5)*shake, (Math.random()-0.5)*shake);
   if (ghost.dead) ctx.rotate(0.1);
-  const squash = ducking ? 0.55 : 1;   // duck under chandeliers!
   // shadow
   const airH = Math.min(1, (groundY - ghost.y) / 220);
   ctx.fillStyle = "rgba(0,0,0,0.4)";
   ctx.beginPath(); ctx.ellipse(0, 5, 30 * (1 - airH * 0.45), 7, 0, 0, Math.PI*2); ctx.fill();
-  ctx.scale(1, squash);
   const bob = ghost.grounded && state === STATE.PLAYING ? Math.sin(ghost.runPhase) * 2 : 0;
   const airb = ghost.grounded ? 0 : 1;
   // little feet peeking out
@@ -386,62 +364,41 @@ function drawGhost() {
 
 function drawObstacle(o) {
   ctx.save();
-  if (o.kind === "crack") {
-    // spooky glowing floor rift — bright and obvious: JUMP it!
-    const cxp = o.x + o.w / 2;
-    const flick = 0.75 + Math.sin(elapsed * 9 + o.seed * 3) * 0.25;
-    // outer warning glow
-    const g = ctx.createRadialGradient(cxp, groundY + 4, 4, cxp, groundY + 4, o.w * 0.75);
-    g.addColorStop(0, "rgba(255,120,40," + (0.5 * flick).toFixed(3) + ")");
-    g.addColorStop(1, "rgba(255,120,40,0)");
-    ctx.fillStyle = g;
-    ctx.beginPath(); ctx.ellipse(cxp, groundY + 4, o.w * 0.75, 26, 0, 0, Math.PI * 2); ctx.fill();
-    // dark rift core with bright lava rim
-    ctx.fillStyle = "#140608";
-    ctx.beginPath(); ctx.ellipse(cxp, groundY + 4, o.w / 2, 13, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = "#ff7a2e"; ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.ellipse(cxp, groundY + 4, o.w / 2, 13, 0, 0, Math.PI * 2); ctx.stroke();
-    // glowing inner cracks
-    ctx.strokeStyle = "rgba(255,200,90," + (0.9 * flick).toFixed(3) + ")"; ctx.lineWidth = 3;
-    for (let i = 0; i < 6; i++) {
-      const txp = o.x + 6 + (o.w - 12) * (i / 5);
-      ctx.beginPath(); ctx.moveTo(txp, groundY - 1);
-      ctx.lineTo(txp + 4, groundY - 10 - ((i * 37 + o.seed * 10) % 9)); ctx.stroke();
-    }
-    // rising embers telegraph the danger
-    ctx.fillStyle = "rgba(255,150,60," + (0.8 * flick).toFixed(3) + ")";
-    for (let i = 0; i < 3; i++) {
-      const ex = o.x + ((o.seed * 53 + i * 37 + elapsed * 40) % o.w);
-      const ey = groundY - 14 - ((elapsed * 60 + i * 23) % 46);
-      ctx.fillRect(ex, ey, 4, 4);
-    }
-  } else if (o.kind === "chandelier") {
-    // hanging chandelier — hangs HIGH with clear space beneath: DUCK under it!
-    const cxp = o.x + o.w / 2;
-    const g = ctx.createRadialGradient(cxp, groundY - 170, 6, cxp, groundY - 170, 95);
-    g.addColorStop(0, "rgba(255,190,90,0.32)"); g.addColorStop(1, "rgba(255,190,90,0)");
-    ctx.fillStyle = g;
-    ctx.beginPath(); ctx.arc(cxp, groundY - 170, 95, 0, Math.PI * 2); ctx.fill();
-    // chain from ceiling
-    ctx.strokeStyle = "#3a3a44"; ctx.lineWidth = 5;
-    ctx.beginPath(); ctx.moveTo(cxp, 0); ctx.lineTo(cxp, groundY - 162); ctx.stroke();
-    // ▼▼▼ hint chevrons showing the way under
-    ctx.fillStyle = "rgba(255,210,63,0.85)";
-    for (let ci = 0; ci < 3; ci++) {
-      const cyy = groundY - 52 + ci * 16 + Math.sin(elapsed * 6 + o.seed) * 3;
+  if (o.kind === "statue") {
+    // spooky gargoyle statue on a stone pedestal — JUMP it!
+    const cxp = o.x + o.w / 2, base = groundY;
+    // pedestal
+    ctx.fillStyle = "#3f3f49";
+    ctx.fillRect(cxp - o.w / 2 + 2, base - 18, o.w - 4, 18);
+    ctx.fillStyle = "#55555f";
+    ctx.fillRect(cxp - o.w / 2 + 2, base - 18, o.w - 4, 5);
+    // wings
+    ctx.fillStyle = "#4c4c57";
+    for (const sg of [-1, 1]) {
       ctx.beginPath();
-      ctx.moveTo(cxp - 10, cyy); ctx.lineTo(cxp + 10, cyy); ctx.lineTo(cxp, cyy + 9);
+      ctx.moveTo(cxp + sg * 9, base - 42);
+      ctx.lineTo(cxp + sg * 28, base - 60);
+      ctx.lineTo(cxp + sg * 20, base - 30);
       ctx.closePath(); ctx.fill();
     }
-    ctx.strokeStyle = "#8a6a2f"; ctx.lineWidth = 7;
-    ctx.beginPath(); ctx.ellipse(cxp, groundY - 150, o.w / 2, 12, 0, 0, Math.PI * 2); ctx.stroke();
-    for (let i = -2; i <= 2; i++) {
-      const px = cxp + i * (o.w / 5);
-      ctx.fillStyle = "#f5e6c4"; ctx.fillRect(px - 4, groundY - 180, 8, 22);
-      const fl = 1 + Math.sin(elapsed * 11 + i * 1.7 + o.seed) * 0.2;
-      ctx.fillStyle = "#ff9f2e";
-      ctx.beginPath(); ctx.ellipse(px, groundY - 186, 4.5, 8 * fl, 0, 0, Math.PI * 2); ctx.fill();
+    // body
+    ctx.fillStyle = "#62626e";
+    ctx.beginPath(); ctx.ellipse(cxp, base - 34, 13, 18, 0, 0, Math.PI * 2); ctx.fill();
+    // head
+    ctx.beginPath(); ctx.arc(cxp, base - 54, 9, 0, Math.PI * 2); ctx.fill();
+    // horns
+    ctx.strokeStyle = "#8e8e9a"; ctx.lineWidth = 3;
+    for (const sg of [-1, 1]) {
+      ctx.beginPath(); ctx.moveTo(cxp + sg * 5, base - 60); ctx.lineTo(cxp + sg * 10, base - 69); ctx.stroke();
     }
+    // glowing purple eyes
+    const gl = 0.55 + Math.sin(elapsed * 7 + o.seed) * 0.3;
+    ctx.fillStyle = "rgba(200,110,255," + gl.toFixed(3) + ")";
+    ctx.fillRect(cxp - 6, base - 56, 4, 4);
+    ctx.fillRect(cxp + 2, base - 56, 4, 4);
+    // stone crack
+    ctx.strokeStyle = "#3a3a44"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(cxp - 7, base - 32); ctx.lineTo(cxp - 1, base - 24); ctx.stroke();
   } else if (o.kind === "pumpkin") {
     // grinning jack-o'-lantern — JUMP it!
     const cxp = o.x + o.w / 2, r = o.h / 2, cy = groundY - r;
@@ -500,28 +457,6 @@ function hitBackButton(e) {
   const x = e.clientX || 0, y = e.clientY || 0;
   return x >= backBtn.x && x <= backBtn.x + backBtn.w && y >= backBtn.y && y <= backBtn.y + backBtn.h;
 }
-function drawDuckButton() {
-  if (!IS_TOUCH) { touchDuckBtn = null; return; }
-  const r = 40, x = W - 64, y = H - 84;
-  touchDuckBtn = { x: x - r, y: y - r, w: r * 2, h: r * 2 };
-  ctx.fillStyle = ducking ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.26)";
-  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.7)"; ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
-  ctx.fillStyle = "#ffffff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.font = "800 26px -apple-system, sans-serif";
-  ctx.fillText("▼", x, y - 8);
-  ctx.font = "800 12px -apple-system, sans-serif";
-  ctx.fillText("DUCK", x, y + 16);
-  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
-}
-function hitDuckButton(e) {
-  if (!touchDuckBtn) return false;
-  const x = e.clientX || 0, y = e.clientY || 0;
-  return x >= touchDuckBtn.x && x <= touchDuckBtn.x + touchDuckBtn.w &&
-         y >= touchDuckBtn.y && y <= touchDuckBtn.y + touchDuckBtn.h;
-}
-
 function drawHUD() {
   ctx.textAlign = "right";
   const pop = 1 + scorePop * 0.8;
@@ -536,8 +471,23 @@ function drawHUD() {
   ctx.textAlign = "left";
 }
 
+function wrapLines(text, maxW) {
+  const words = String(text).split(" ");
+  const out = []; let cur = "";
+  for (const wd of words) {
+    const t = cur ? cur + " " + wd : wd;
+    if (ctx.measureText(t).width > maxW && cur) { out.push(cur); cur = wd; }
+    else cur = t;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
 function drawPanel(title, lines, accent) {
-  const w = Math.min(W - 60, 420), h = 120 + lines.length * 30;
+  const w = Math.min(W - 60, 420);
+  ctx.font = "700 19px -apple-system, sans-serif";
+  const wrapped = [];
+  for (const ln of lines) wrapped.push(...wrapLines(ln, w - 60));
+  const h = 130 + wrapped.length * 30;
   const x = W / 2 - w / 2, y = H / 2 - h / 2;
   ctx.fillStyle = "rgba(20,10,5,0.72)";
   roundRect(x, y, w, h, 22); ctx.fill();
@@ -547,7 +497,7 @@ function drawPanel(title, lines, accent) {
   ctx.fillStyle = accent; ctx.font = "900 40px -apple-system, sans-serif";
   ctx.fillText(title, W / 2, y + 62);
   ctx.fillStyle = "#ffffff"; ctx.font = "700 19px -apple-system, sans-serif";
-  lines.forEach((ln, i) => ctx.fillText(ln, W / 2, y + 108 + i * 30));
+  wrapped.forEach((ln, i) => ctx.fillText(ln, W / 2, y + 108 + i * 30));
   ctx.textAlign = "left";
 }
 
@@ -558,12 +508,11 @@ function draw() {
   drawGhost();
   drawParticles();
   drawBackButton();
-  drawDuckButton();
   if (state === STATE.PLAYING) drawHUD();
   if (state === STATE.TITLE) {
     drawPanel("HAUNTED HALLWAY!", [
-      "Jump the cracks, duck the chandeliers!",
-      "Tap / Space to jump — ▼ button or hold ↓ to duck.",
+      "Jump the statues and pumpkins!",
+      "Tap or press Space to jump.",
       best > 0 ? ("Best: " + best) : "How far can you float?"
     ], "#b366ff");
   } else if (state === STATE.OVER) {
