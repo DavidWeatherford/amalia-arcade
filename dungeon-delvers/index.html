@@ -146,19 +146,19 @@ function sprFrame(name,frame,sx,sy,size){
 }
 
 const BESTIARY={
-  crypt_imp:{ name:"Crypt Imp", hp:140, speed:110, dmg:5, range:44, atkCd:1.6, xp:35,
+  crypt_imp:{ name:"Crypt Imp", hp:140, speed:110, dmg:5, range:64, atkCd:1.6, xp:35,
     behavior:"chaser", r:14, color:"#7a5fa8",
     desc:"Flutters straight at you." },
   skeleton_archer:{ name:"Skeleton Archer", hp:160, speed:80, dmg:7, range:300, atkCd:3.0, xp:50,
     behavior:"shooter", r:15, color:"#cfc39a",
     desc:"Stands its ground and fires bones." },
-  slime:{ name:"Slime", hp:170, speed:70, dmg:6, range:40, atkCd:1.8, xp:40,
+  slime:{ name:"Slime", hp:170, speed:70, dmg:6, range:60, atkCd:1.8, xp:40,
     behavior:"chaser", r:14, color:"#f0a050", split:true,
     desc:"Pops into two mini-slimes!" },
-  mini_slime:{ name:"Mini Slime", hp:55, speed:105, dmg:4, range:36, atkCd:1.4, xp:14,
+  mini_slime:{ name:"Mini Slime", hp:55, speed:105, dmg:4, range:52, atkCd:1.4, xp:14,
     behavior:"chaser", r:10, color:"#f7b46a",
     desc:"A wobbly little blob." },
-  wisp:{ name:"Wisp", hp:120, speed:155, dmg:5, range:40, atkCd:1.2, xp:30,
+  wisp:{ name:"Wisp", hp:120, speed:155, dmg:5, range:60, atkCd:1.2, xp:30,
     behavior:"chaser", r:12, color:"#9fd8ff",
     desc:"Fast and spooky. Barely there." },
 };
@@ -182,7 +182,7 @@ const LOOT_TABLE=[
 const RARITY=[ {n:"Common",c:"#b8b8c8",mult:1}, {n:"Magic",c:"#5aa9ff",mult:1.6}, {n:"Epic",c:"#c86bff",mult:2.4} ];
 
 const CLASSES={
-  warrior:{ name:"Warrior", color:"#4a90d9", hp:145, atk:9, def:6, speed:190, range:64, atkCd:1.2,
+  warrior:{ name:"Warrior", color:"#4a90d9", hp:145, atk:9, def:6, speed:190, range:88, atkCd:1.2,
     threatMul:2.0, ability:"Shield Wall", abilityDesc:"5s: half damage, taunt all",
     desc:"Tank. Draws aggro, shrugs off hits." },
   mage:{ name:"Mage", color:"#a86bff", hp:90, atk:18, def:2, speed:190, range:300, atkCd:1.6,
@@ -875,7 +875,7 @@ function update(dt){
       if(dist(h.x,h.y,l.x,l.y)<34){ pickupLoot(h,l); loots.splice(i,1); } }
   }
   for(const m of monsters){ m.atkT-=dt; m.hitT-=dt; m.wob+=dt*5; if(m.lunge)m.lunge.t+=dt; if(!m.target||m.target.downed)retarget(m); monsterAI(m,dt); }
-  separate(party,46); separate(monsters,40);
+  separate(party,54); separate(monsters,48);
   // projectiles
   for(let i=projectiles.length-1;i>=0;i--){ const p=projectiles[i];
     // homing: friendly bolts track their target
@@ -936,7 +936,7 @@ function playerCombat(me,dt){
   if(!t)return;
   const range=CLASSES[me.cls].range;
   const d=dist(me.x,me.y,t.x,t.y);
-  if(d>range*0.9)steerMove(me,t.x,t.y,dt); // pursue until in range — target stays locked
+  if(d>range)steerMove(me,t.x,t.y,dt); // pursue until in range — target stays locked
   else { me.moving=false; if(me.atkT<=0)basicAttack(me,t); }
 }
 // ================= DRAW =================
@@ -1273,7 +1273,7 @@ function drawIndicators(){
       ctx.beginPath(); ctx.arc(mx,my,4,0,Math.PI*2); ctx.fill();
     }
     const t=h.atkTarget;
-    if(t&&t.hp>0&&monsters.includes(t)){ // bouncing chevron + dashed link to the target
+    if(h.isPlayer&&t&&t.hp>0&&monsters.includes(t)){ // bouncing chevron + dashed link to YOUR target only
       const tx=t.x-cam.x, ty=t.y-cam.y;
       ctx.strokeStyle="rgba(255,90,90,0.45)"; ctx.lineWidth=2; ctx.setLineDash([7,7]);
       ctx.beginPath(); ctx.moveTo(hx,hy-12); ctx.lineTo(tx,ty-12); ctx.stroke();
