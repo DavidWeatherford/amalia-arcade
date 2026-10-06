@@ -113,7 +113,7 @@ const TRAPS={
   spikes:{ name:"Spike Trap", dmg:10, desc:"Telegraphed floor spikes." },
 };
 const BOSSES={
-  crypt_keeper:{ name:"The Crypt Keeper", hp:680, speed:62, dmg:12, r:30, color:"#5e2f8f", xp:130,
+  crypt_keeper:{ name:"The Crypt Keeper", hp:980, speed:62, dmg:14, r:30, color:"#5e2f8f", xp:150,
     desc:"Slams the ground and calls his imps." },
 };
 const LOOT_TABLE=[
@@ -369,13 +369,14 @@ function retarget(m){
   m.target=best;
 }
 function gainXP(n){
-  for(const h of party){
+  for(let i=0;i<party.length;i++){
+    const h=party[i];
     if(h.downed)continue;
     h.xp+=n;
     while(h.xp>=h.xpNext){
       h.xp-=h.xpNext; h.level++; h.xpNext=Math.round(h.xpNext*1.5);
       const st=heroStats(h); h.hp=st.maxhp;
-      addFloater(h.x,h.y-34,"LEVEL "+h.level+"!","#ffe9a8",20); sfx.level();
+      addFloater(h.x,h.y-34-i*24,"LEVEL "+h.level+"!","#ffe9a8",20); sfx.level();
       burst(h.x,h.y,16,"#ffe9a8");
     }
   }
