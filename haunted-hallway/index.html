@@ -71,11 +71,11 @@ let shake = 0, newBest = false;
 let backBtn = null;
 
 const OB_KINDS = [
-  { w: 48, h: 26, kind: "crack" },
-  { w: 68, h: 26, kind: "crack" },
+  { w: 56, h: 26, kind: "crack" },
+  { w: 80, h: 26, kind: "crack" },
   { w: 42, h: 38, kind: "pumpkin" },
   { w: 56, h: 40, kind: "pumpkin" },
-  { w: 64, h: 0, kind: "chandelier" },   // hangs from ceiling: DUCK!
+  { w: 64, h: 0, kind: "chandelier" },   // hangs HIGH: DUCK only!
 ];
 
 function resize() {
@@ -189,7 +189,7 @@ function update(now) {
 
   if (state !== STATE.PLAYING) return;
   elapsed += dt;
-  speed = Math.min(330 + elapsed * 3.5, 750);   // gentle 2-minute ramp
+  speed = Math.min(340 + elapsed * 7.2, 780);   // ramps to super-difficult by ~60s
 
   // duck state: held key, or timed swipe-duck
   ducking = keyDuck || elapsed < duckUntil;
@@ -214,7 +214,7 @@ function update(now) {
   if (spawnIn <= 0) {
     const k = OB_KINDS[(Math.random() * OB_KINDS.length) | 0];
     obstacles.push({ x: W + 60, w: k.w, h: k.h, kind: k.kind, seed: Math.random() * 10 });
-    spawnIn = 300 + Math.random() * 360 + speed * 0.5;   // reaction window shrinks as speed climbs
+    spawnIn = 420 + Math.random() * 380 + speed * 0.75;   // fair gaps: always room to land a jump or finish a duck
   }
   for (let i = obstacles.length - 1; i >= 0; i--) {
     const o = obstacles[i];
@@ -225,7 +225,7 @@ function update(now) {
     const ry0 = ghost.y - (ducking ? 28 : 58), ry1 = ghost.y - 4;
     const ox0 = o.x + 6, ox1 = o.x + o.w - 6;
     let oy0, oy1;
-    if (o.kind === "chandelier") { oy0 = groundY - 122; oy1 = groundY - 52; }
+    if (o.kind === "chandelier") { oy0 = groundY - 205; oy1 = groundY - 70; }  // hangs HIGH: duck only, can't jump over
     else { oy0 = groundY - o.h + 6; oy1 = groundY - 2; }
     if (rx0 < ox1 && rx1 > ox0 && ry0 < oy1 && ry1 > oy0) { endGame(); return; }
   }
@@ -387,35 +387,60 @@ function drawGhost() {
 function drawObstacle(o) {
   ctx.save();
   if (o.kind === "crack") {
-    // spooky glowing floor crack — JUMP it!
+    // spooky glowing floor rift — bright and obvious: JUMP it!
     const cxp = o.x + o.w / 2;
-    ctx.fillStyle = "#0a0512";
-    ctx.beginPath(); ctx.ellipse(cxp, groundY + 4, o.w / 2, 12, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = "rgba(155,48,255,0.4)";
-    ctx.beginPath(); ctx.ellipse(cxp, groundY + 4, o.w / 2 - 9, 6, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = "#2c1240"; ctx.lineWidth = 3;
+    const flick = 0.75 + Math.sin(elapsed * 9 + o.seed * 3) * 0.25;
+    // outer warning glow
+    const g = ctx.createRadialGradient(cxp, groundY + 4, 4, cxp, groundY + 4, o.w * 0.75);
+    g.addColorStop(0, "rgba(255,120,40," + (0.5 * flick).toFixed(3) + ")");
+    g.addColorStop(1, "rgba(255,120,40,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.ellipse(cxp, groundY + 4, o.w * 0.75, 26, 0, 0, Math.PI * 2); ctx.fill();
+    // dark rift core with bright lava rim
+    ctx.fillStyle = "#140608";
+    ctx.beginPath(); ctx.ellipse(cxp, groundY + 4, o.w / 2, 13, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#ff7a2e"; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.ellipse(cxp, groundY + 4, o.w / 2, 13, 0, 0, Math.PI * 2); ctx.stroke();
+    // glowing inner cracks
+    ctx.strokeStyle = "rgba(255,200,90," + (0.9 * flick).toFixed(3) + ")"; ctx.lineWidth = 3;
     for (let i = 0; i < 6; i++) {
       const txp = o.x + 6 + (o.w - 12) * (i / 5);
       ctx.beginPath(); ctx.moveTo(txp, groundY - 1);
       ctx.lineTo(txp + 4, groundY - 10 - ((i * 37 + o.seed * 10) % 9)); ctx.stroke();
     }
+    // rising embers telegraph the danger
+    ctx.fillStyle = "rgba(255,150,60," + (0.8 * flick).toFixed(3) + ")";
+    for (let i = 0; i < 3; i++) {
+      const ex = o.x + ((o.seed * 53 + i * 37 + elapsed * 40) % o.w);
+      const ey = groundY - 14 - ((elapsed * 60 + i * 23) % 46);
+      ctx.fillRect(ex, ey, 4, 4);
+    }
   } else if (o.kind === "chandelier") {
-    // hanging chandelier — DUCK under it!
+    // hanging chandelier — hangs HIGH with clear space beneath: DUCK under it!
     const cxp = o.x + o.w / 2;
-    const g = ctx.createRadialGradient(cxp, groundY - 130, 6, cxp, groundY - 130, 95);
+    const g = ctx.createRadialGradient(cxp, groundY - 170, 6, cxp, groundY - 170, 95);
     g.addColorStop(0, "rgba(255,190,90,0.32)"); g.addColorStop(1, "rgba(255,190,90,0)");
     ctx.fillStyle = g;
-    ctx.beginPath(); ctx.arc(cxp, groundY - 130, 95, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(cxp, groundY - 170, 95, 0, Math.PI * 2); ctx.fill();
+    // chain from ceiling
     ctx.strokeStyle = "#3a3a44"; ctx.lineWidth = 5;
-    ctx.beginPath(); ctx.moveTo(cxp, 0); ctx.lineTo(cxp, groundY - 118); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cxp, 0); ctx.lineTo(cxp, groundY - 162); ctx.stroke();
+    // ▼▼▼ hint chevrons showing the way under
+    ctx.fillStyle = "rgba(255,210,63,0.85)";
+    for (let ci = 0; ci < 3; ci++) {
+      const cyy = groundY - 52 + ci * 16 + Math.sin(elapsed * 6 + o.seed) * 3;
+      ctx.beginPath();
+      ctx.moveTo(cxp - 10, cyy); ctx.lineTo(cxp + 10, cyy); ctx.lineTo(cxp, cyy + 9);
+      ctx.closePath(); ctx.fill();
+    }
     ctx.strokeStyle = "#8a6a2f"; ctx.lineWidth = 7;
-    ctx.beginPath(); ctx.ellipse(cxp, groundY - 108, o.w / 2, 12, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(cxp, groundY - 150, o.w / 2, 12, 0, 0, Math.PI * 2); ctx.stroke();
     for (let i = -2; i <= 2; i++) {
       const px = cxp + i * (o.w / 5);
-      ctx.fillStyle = "#f5e6c4"; ctx.fillRect(px - 4, groundY - 138, 8, 22);
+      ctx.fillStyle = "#f5e6c4"; ctx.fillRect(px - 4, groundY - 180, 8, 22);
       const fl = 1 + Math.sin(elapsed * 11 + i * 1.7 + o.seed) * 0.2;
       ctx.fillStyle = "#ff9f2e";
-      ctx.beginPath(); ctx.ellipse(px, groundY - 144, 4.5, 8 * fl, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(px, groundY - 186, 4.5, 8 * fl, 0, 0, Math.PI * 2); ctx.fill();
     }
   } else if (o.kind === "pumpkin") {
     // grinning jack-o'-lantern — JUMP it!
