@@ -327,7 +327,7 @@ function makeHero(clsKey,isPlayer,idx){
     x:0,y:0, r:18, color:c.color, maxhp:c.hp, hp:c.hp, atk:c.atk, def:c.def,
     speed:c.speed, range:c.range, atkCd:c.atkCd, atkT:0, threatMul:c.threatMul,
     level:1, xp:0, xpNext:30, path:null, moveT:null, atkTarget:null,
-    downed:false, reviveT:0, reviveBy:null, abilityCd:0, shieldT:0, face:0, potions:0,
+    downed:false, reviveT:0, reviveBy:null, abilityCd:0, shieldT:0, face:0, potions:0, hitT:0,
     aiT:rand(0,0.3), anchor:null, wob:rand(0,6), gearAtk:0, gearDef:0, gearHp:0 };
 }
 function heroStats(h){ return { atk:h.atk+h.gearAtk+(h.level-1)*2, def:h.def+h.gearDef+(h.level-1)*1,
@@ -805,7 +805,9 @@ function update(dt){
   }
   for(const h of party){
     if(h.downed)continue;
-    h.atkT-=dt; h.abilityCd-=dt; h.shieldT-=dt; h.wob+=dt*6; if(h.lunge)h.lunge.t+=dt;
+    h.atkT-=dt; h.abilityCd-=dt; h.shieldT-=dt; h.wob+=dt*6; h.hitT-=dt; if(h.lunge)h.lunge.t+=dt;
+    if(h.moving&&Math.random()<dt*5)particles.push({x:h.x+rand(-10,10),y:h.y+14, // F: dust puffs
+      vx:rand(-25,25),vy:rand(-35,-10),t:0,life:rand(0.3,0.5),color:"rgba(190,180,160,0.45)"});
     if(h.isPlayer)playerCombat(h,dt); else npcAI(h,dt);
     if(h.moveT)steerMove(h,h.moveT.x,h.moveT.y,dt); // player tap-paths keep moveT/atkTarget exclusive; NPCs pursue via moveT
     // revive channel
@@ -1066,8 +1068,16 @@ function drawTraps(){
     ctx.fillStyle="#454552"; ctx.beginPath(); ctx.roundRect(x-17,y-17,34,34,5); ctx.fill();
     ctx.fillStyle="#22222a";
     for(const [rx,ry] of [[-13,-13],[13,-13],[-13,13],[13,13]]){ ctx.beginPath(); ctx.arc(x+rx,y+ry,2.5,0,Math.PI*2); ctx.fill(); }
-    if(tr.state===1){ ctx.fillStyle="rgba(255,70,70,"+(0.3+0.25*Math.sin(elapsed*14)).toFixed(2)+")";
-      ctx.beginPath(); ctx.roundRect(x-17,y-17,34,34,5); ctx.fill(); }
+    if(tr.state===1){ // F: big pulsing danger ring + growing "!" as the strike nears
+      const urg=1-tr.t/0.8;
+      const pr=32+7*Math.sin(elapsed*16);
+      ctx.strokeStyle="rgba(255,60,60,"+(0.5+0.4*urg).toFixed(2)+")"; ctx.lineWidth=3+3*urg;
+      ctx.beginPath(); ctx.arc(x,y,pr,0,Math.PI*2); ctx.stroke();
+      ctx.fillStyle="rgba(255,60,60,"+(0.22+0.35*urg).toFixed(2)+")";
+      ctx.beginPath(); ctx.roundRect(x-17,y-17,34,34,5); ctx.fill();
+      ctx.fillStyle="#fff"; ctx.font="bold "+Math.round(15+9*urg)+"px sans-serif"; ctx.textAlign="center";
+      ctx.fillText("!",x,y-28);
+    }
     const sf=tr.state===2?3:tr.state===1?(Math.floor(elapsed*12)%2)+1:0;
     if(!sprFrame("spikes",sf,x-20,y-20,40)){
       ctx.fillStyle="#4a4a55"; ctx.fillRect(x-14,y-14,28,28);
@@ -1128,10 +1138,13 @@ function drawHero(h){
     return;
   }
   const bob=moving?Math.abs(Math.sin(elapsed*9+h.wob))*3:0;
+  const pop=h.hitT>0?1+0.15*(h.hitT/0.15):1; // F: squash-and-stretch on hit
+  ctx.save(); ctx.translate(x,y+16-bob); ctx.scale(pop,2-pop); ctx.translate(-x,-(y+16-bob));
   if(!spr2(CLASS_SPR[h.cls],x,y+16-bob,64,flip)){
     // fallback while sheet loads
     ctx.fillStyle=h.color; ctx.beginPath(); ctx.arc(x,y,15,0,Math.PI*2); ctx.fill();
   }
+  ctx.restore();
   if(h.shieldT>0){ ctx.strokeStyle="rgba(120,180,255,0.9)"; ctx.lineWidth=3;
     ctx.beginPath(); ctx.arc(x,y-14,26,0,Math.PI*2); ctx.stroke();
     ctx.strokeStyle="rgba(120,180,255,0.35)"; ctx.lineWidth=7;
@@ -1154,6 +1167,8 @@ function drawMonster(m){
   const R=m.r;
   ctx.fillStyle="rgba(0,0,0,0.35)";
   ctx.beginPath(); ctx.ellipse(x,y+R*0.75,R,R*0.35,0,0,Math.PI*2); ctx.fill();
+  const mpop=m.hitT>0?1+0.15*(m.hitT/0.15):1; // F: squash-and-stretch on hit
+  ctx.save(); ctx.translate(x,y); ctx.scale(mpop,2-mpop); ctx.translate(-x,-y);
   let drawn=false;
   const MSPR={crypt_imp:"mon_imp",skeleton_archer:"mon_archer",slime:"mon_slime",mini_slime:"mon_slime",wisp:"mon_ghost"};
   if(m.elite){
@@ -1181,6 +1196,7 @@ function drawMonster(m){
       drawn=spr2("boss_skeleton_king",x,y+20,150*pulse,flip);
     }
   }
+  ctx.restore();
   if(!drawn){ ctx.fillStyle=m.color; ctx.beginPath(); ctx.arc(x,y-10,R,0,Math.PI*2); ctx.fill(); }
   if(m.elite){ ctx.strokeStyle="rgba(200,110,255,0.85)"; ctx.lineWidth=3; ctx.setLineDash([8,6]);
     ctx.beginPath(); ctx.arc(x,y-16,R+12,elapsed*1.5,elapsed*1.5+Math.PI*2); ctx.stroke(); ctx.setLineDash([]); }
