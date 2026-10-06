@@ -763,13 +763,16 @@ function drawHero(h){
   if(h.shieldT>0){ ctx.strokeStyle="rgba(120,180,255,0.9)"; ctx.lineWidth=3;
     ctx.beginPath(); ctx.arc(0,0,h.r+6,0,Math.PI*2); ctx.stroke(); }
   ctx.restore();
-  // hp bar + name
+  // hp bar + name (staggered when heroes cluster)
   const st=heroStats(h);
-  ctx.fillStyle="rgba(0,0,0,0.6)"; ctx.fillRect(x-22,y-34,44,7);
+  let slot=0;
+  for(const o of party){ if(o!==h&&party.indexOf(o)<party.indexOf(h)&&dist(o.x,o.y,h.x,h.y)<64)slot++; }
+  const ly=y-38-slot*17;
+  ctx.fillStyle="rgba(0,0,0,0.6)"; ctx.fillRect(x-22,ly+4,44,7);
   ctx.fillStyle=h.downed?"#666":(h.hp/st.maxhp>0.35?"#6bff8f":"#ff5e78");
-  ctx.fillRect(x-21,y-33,42*clamp(h.hp/st.maxhp,0,1),5);
+  ctx.fillRect(x-21,ly+5,42*clamp(h.hp/st.maxhp,0,1),5);
   ctx.fillStyle=h.isPlayer?"#ffe9a8":"#cfc3e8"; ctx.font="11px sans-serif"; ctx.textAlign="center";
-  ctx.fillText(h.downed?"DOWN!":(h.name+" Lv"+h.level),x,y-38);
+  ctx.fillText(h.downed?"DOWN!":(h.name+" Lv"+h.level),x,ly);
   if(h.downed){ ctx.fillStyle="#ff5e78"; ctx.font="bold 13px sans-serif"; ctx.fillText("TAP TO REVIVE",x,y+30); }
 }
 function drawMonster(m){
@@ -855,10 +858,11 @@ function drawHUD(){
     ctx.strokeStyle="#fff"; ctx.lineWidth=3; ctx.beginPath(); ctx.arc(bx,by,44,0,Math.PI*2); ctx.stroke();
     ctx.fillStyle="#1a1a22"; ctx.font="bold 13px sans-serif"; ctx.textAlign="center";
     const label=me.cls==="warrior"?"SHIELD":me.cls==="mage"?"FIRE":"HEAL";
-    ctx.fillText(label,bx,by-2);
-    if(me.abilityCd>0){ ctx.fillStyle="#fff"; ctx.font="bold 18px sans-serif"; ctx.fillText(Math.ceil(me.abilityCd),bx,by+18); }
-    else if(me.cls==="mage"&&abilityTargeting){ ctx.fillStyle="#ff9f2e"; ctx.font="bold 12px sans-serif"; ctx.fillText("tap a spot",bx,by+18); }
-    else { ctx.fillStyle="#1a1a22"; ctx.font="11px sans-serif"; ctx.fillText(CLASSES[me.cls].abilityDesc,bx,by+18); }
+    ctx.fillText(label,bx,by-4);
+    if(me.abilityCd>0){ ctx.fillStyle="#fff"; ctx.font="bold 18px sans-serif"; ctx.fillText(Math.ceil(me.abilityCd),bx,by+16); }
+    else if(me.cls==="mage"&&abilityTargeting){ ctx.fillStyle="#ff9f2e"; ctx.font="bold 12px sans-serif"; ctx.fillText("tap a spot",bx,by+16); }
+    ctx.fillStyle="rgba(255,233,168,0.9)"; ctx.font="11px sans-serif"; ctx.textAlign="center";
+    ctx.fillText(CLASSES[me.cls].ability+": "+CLASSES[me.cls].abilityDesc,bx,by+62);
   }
   // boss bar
   if(bossRef&&bossRef.hp>0){
@@ -870,12 +874,12 @@ function drawHUD(){
   }
 }
 function drawMinimap(){
-  const mw=132,mh=82, mx=W-mw-12, my=54;
+  const mw=168,mh=104, mx=W-mw-12, my=54;
   const sx=mw/(dung.gw), sy=mh/(dung.gh);
   ctx.fillStyle="rgba(6,4,10,0.85)"; ctx.beginPath(); ctx.roundRect(mx-4,my-4,mw+8,mh+8,8); ctx.fill();
   for(let ty=0;ty<dung.gh;ty++)for(let tx=0;tx<dung.gw;tx++){
     const f=dung.fog[ty*dung.gw+tx]; if(!f)continue;
-    ctx.fillStyle=f===2?"#6f5f8f":"#332a44";
+    ctx.fillStyle=f===2?"#8f7cb5":"#453a5c";
     ctx.fillRect(mx+tx*sx,my+ty*sy,Math.ceil(sx),Math.ceil(sy));
   }
   for(const m of monsters){ const t=Math.floor(m.x/TILE),t2=Math.floor(m.y/TILE);
@@ -921,22 +925,24 @@ function drawPick(){
   const cw=Math.min(220,(W-60)/3-16);
   ["warrior","mage","cleric"].forEach((k,i)=>{
     const c=CLASSES[k];
-    const x=W/2-((cw+16)*3)/2+i*(cw+16)+8, y=160, h=300;
+    const x=W/2-((cw+16)*3)/2+i*(cw+16)+8, y=150, h=330;
     ctx.fillStyle="rgba(20,12,32,0.95)"; ctx.beginPath(); ctx.roundRect(x,y,cw,h,16); ctx.fill();
     ctx.strokeStyle=c.color; ctx.lineWidth=4; ctx.beginPath(); ctx.roundRect(x,y,cw,h,16); ctx.stroke();
-    ctx.fillStyle=c.color; ctx.beginPath(); ctx.arc(x+cw/2,y+70,34,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=c.color; ctx.beginPath(); ctx.arc(x+cw/2,y+66,30,0,Math.PI*2); ctx.fill();
     ctx.fillStyle="#fff"; ctx.font="bold 20px sans-serif"; ctx.textAlign="center";
     ctx.fillText(c.name,x+cw/2,y+130);
     ctx.font="14px sans-serif"; ctx.fillStyle="#cfc3e8";
     wrapText(c.desc,x+16,y+160,cw-32,20);
     ctx.fillStyle="#ffe9a8"; ctx.font="bold 13px sans-serif";
-    ctx.fillText("❤"+c.hp+"  ⚔"+c.atk+"  🛡"+c.def,x+cw/2,y+250);
-    ctx.fillStyle="#ffb347"; ctx.font="bold 13px sans-serif";
-    ctx.fillText(c.ability+": "+c.abilityDesc,x+cw/2,y+274);
+    ctx.fillText("❤"+c.hp+"  ⚔"+c.atk+"  🛡"+c.def,x+cw/2,y+268);
+    ctx.fillStyle="#ffb347"; ctx.font="bold 12px sans-serif";
+    const ab=c.ability+": "+c.abilityDesc;
+    if(ab.length>26){ ctx.fillText(c.ability,x+cw/2,y+290); ctx.fillText(c.abilityDesc,x+cw/2,y+308); }
+    else ctx.fillText(ab,x+cw/2,y+296);
     canvas._pick=i;
   });
   canvas._pickRects=["warrior","mage","cleric"].map((k,i)=>{
-    const x=W/2-((cw+16)*3)/2+i*(cw+16)+8; return {k,x,y:160,w:cw,h:300};
+    const x=W/2-((cw+16)*3)/2+i*(cw+16)+8; return {k,x,y:150,w:cw,h:330};
   });
 }
 function wrapText(text,x,y,maxW,lh){
