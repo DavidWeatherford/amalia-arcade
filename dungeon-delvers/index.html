@@ -311,7 +311,8 @@ function startRun(clsKey){
 function addFloater(x,y,text,color,size){
   floaters.push({x,y,text,color:color||"#fff",size:size||16,t:0,life:1.4});
 }
-function addSlash(x,y,angle,color){ effects.push({kind:"slash",x,y,angle,color:color||"#ffe9a8",t:0,life:0.22}); }
+function addSlash(x,y,angle,color){ effects.push({kind:"slash",x,y,angle,color:color||"#ffe9a8",t:0,life:0.3}); }
+function addHit(x,y){ effects.push({kind:"hit",x,y,t:0,life:0.18}); }
 function addBoom(x,y,r){ effects.push({kind:"boom",x,y,r:r||70,t:0,life:0.35}); }
 function addScorch(x,y,r){ effects.push({kind:"scorch",x,y,r:r||44,t:0,life:5}); }
 function addHealRing(x,y){ effects.push({kind:"healring",x,y,t:0,life:0.6}); }
@@ -324,7 +325,7 @@ function dealDamage(src,dst,amount){
   if(dst.downed||dst.hp<=0)return;
   let dmg=Math.max(1,Math.round(amount-(dst.def||0)*0.6));
   if(dst.kind==="hero"&&dst.shieldT>0)dmg=Math.max(1,Math.round(dmg*0.4));
-  dst.hp-=dmg; dst.hitT=0.15;
+  dst.hp-=dmg; dst.hitT=0.15; addHit(dst.x,dst.y);
   addFloater(dst.x+rand(-8,8),dst.y-dst.r-6,"-"+dmg,dst.kind==="hero"?"#ff6b7a":"#ffe9a8",15);
   burst(dst.x,dst.y,4,dst.kind==="hero"?"#ff6b7a":"#ffd76b");
   if(dst.kind==="mon"||dst.kind==="boss"){
@@ -977,11 +978,18 @@ function drawEffects(){
     const x=f.x-cam.x, y=f.y-cam.y, p=f.t/f.life;
     if(f.kind==="slash"){
       ctx.save(); ctx.translate(x,y); ctx.rotate(f.angle); ctx.globalAlpha=1-p;
-      ctx.strokeStyle=f.color; ctx.lineCap="round"; ctx.lineWidth=10*(1-p)+2;
-      ctx.beginPath(); ctx.arc(0,0,30,-0.85,0.85); ctx.stroke();
-      ctx.strokeStyle="#ffffff"; ctx.lineWidth=3;
-      ctx.beginPath(); ctx.arc(0,0,23,-0.7,0.7); ctx.stroke();
+      ctx.strokeStyle=f.color; ctx.lineCap="round"; ctx.lineWidth=14*(1-p)+3;
+      ctx.beginPath(); ctx.arc(0,0,38,-0.9,0.9); ctx.stroke();
+      ctx.strokeStyle="#ffffff"; ctx.lineWidth=4;
+      ctx.beginPath(); ctx.arc(0,0,30,-0.75,0.75); ctx.stroke();
       ctx.restore(); ctx.globalAlpha=1;
+    } else if(f.kind==="hit"){
+      ctx.globalAlpha=0.85*(1-p);
+      ctx.fillStyle="#ffffff";
+      ctx.beginPath(); ctx.arc(x,y,22*(1-p)+7,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle="#fff"; ctx.lineWidth=3;
+      ctx.beginPath(); ctx.arc(x,y,10+p*34,0,Math.PI*2); ctx.stroke();
+      ctx.globalAlpha=1;
     } else if(f.kind==="boom"){
       ctx.globalAlpha=1-p;
       ctx.fillStyle="rgba(255,190,90,0.75)";
