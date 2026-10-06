@@ -545,9 +545,8 @@ function monsterAI(m,dt){
     if(d>m.range*0.8)steerMove(m,t.x,t.y,dt);
     else { m.moving=false; if(m.atkT<=0){ addSlash(t.x,t.y,m.face,"#ff6b7a"); dealDamage(m,t,m.dmg); m.atkT=m.atkCd; } }
   } else if(m.behavior==="shooter"){
-    if(d<m.range*0.6)steerMove(m,m.x+(m.x-t.x),m.y+(m.y-t.y),dt);
-    else if(d>m.range)steerMove(m,t.x,t.y,dt);
-    else m.moving=false;
+    if(d>m.range*0.9)steerMove(m,t.x,t.y,dt); // close in only when out of range
+    else m.moving=false; // stand ground and shoot — no kiting away
     if(d<m.range&&m.atkT<=0){
       const a=Math.atan2(t.y-m.y,t.x-m.x);
       projectiles.push({x:m.x,y:m.y,vx:Math.cos(a)*300,vy:Math.sin(a)*300,r:6,dmg:m.dmg,friendly:false,color:"#e8e0c0",from:m,kind:"bone"});
