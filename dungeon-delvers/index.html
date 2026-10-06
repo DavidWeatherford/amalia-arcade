@@ -168,7 +168,10 @@ const TRAPS={
 const BOSSES={
   crypt_keeper:{ name:"The Skeleton King", hp:980, speed:62, dmg:14, r:30, color:"#5e2f8f", xp:150,
     desc:"Slams the ground and calls his imps." },
+  slime_king:{ name:"The Slime King", hp:850, speed:55, dmg:12, r:34, color:"#5fd35f", xp:150,
+    desc:"Splash-slams the ground and splits off slimes." },
 };
+let runBossKey="crypt_keeper"; // B: picked randomly per run in startRun
 const LOOT_TABLE=[
   { kind:"weapon", stat:"atk", min:2, max:5, name:"Rusty Sword" },
   { kind:"weapon", stat:"atk", min:4, max:8, name:"Moonlit Blade" },
@@ -325,13 +328,13 @@ function spawnMonsterAt(type,x,y){
   const m=monsters[monsters.length-1]; m.x=x; m.y=y; return m;
 }
 function spawnBoss(){
-  const b=BOSSES.crypt_keeper, r=dung.rooms[3];
-  const m={ kind:"boss", type:"crypt_keeper", name:b.name, x:dung.px(r.cx), y:dung.py(r.cy), r:b.r,
+  const b=BOSSES[runBossKey], r=dung.rooms[3];
+  const m={ kind:"boss", type:runBossKey, bossType:runBossKey, name:b.name, x:dung.px(r.cx), y:dung.py(r.cy), r:b.r,
     maxhp:b.hp, hp:b.hp, dmg:b.dmg, speed:b.speed, range:70, atkCd:1.4, atkT:0,
     xp:b.xp, behavior:"boss", color:b.color, threat:{}, target:null, wob:0, hitT:0,
     slamT:6, summonT:10, telegraph:null, face:0, elite:false };
   monsters.push(m); bossRef=m; sfx.roar();
-  addFloater(m.x,m.y-50,"THE SKELETON KING","#ff5e78",26);
+  addFloater(m.x,m.y-50,b.name.toUpperCase(),"#ff5e78",26);
 }
 function spawnElite(type,tx,ty){
   spawnMonster(type,tx,ty);
@@ -365,7 +368,7 @@ function startRun(clsKey){
   seedShown=(Math.random()*1e9)|0;
   dung=genDungeon(seedShown);
   party=[]; monsters=[]; projectiles=[]; loots=[]; floaters=[]; particles=[];
-  elapsed=0; kills=0; bossSpawned=false; bossRef=null;
+  elapsed=0; kills=0; bossSpawned=false; bossRef=null; runBossKey=choice(Object.keys(BOSSES));
   const order=["warrior","mage","cleric"];
   const r0=dung.rooms[0];
   order.forEach((ck,i)=>{
@@ -384,7 +387,7 @@ function addFloater(x,y,text,color,size){
 }
 function addSlash(x,y,angle,color){ effects.push({kind:"slash",x,y,angle,color:color||"#ffe9a8",t:0,life:0.3}); }
 function addHit(x,y){ effects.push({kind:"hit",x,y,t:0,life:0.18}); }
-function addBoom(x,y,r){ effects.push({kind:"boom",x,y,r:r||70,t:0,life:0.35}); }
+function addBoom(x,y,r,col){ effects.push({kind:"boom",x,y,r:r||70,col:col||"orange",t:0,life:0.35}); }
 function addScorch(x,y,r){ effects.push({kind:"scorch",x,y,r:r||44,t:0,life:5}); }
 function addHealRing(x,y){ effects.push({kind:"healring",x,y,t:0,life:0.6}); }
 function burst(x,y,n,color){
@@ -641,12 +644,15 @@ function monsterAI(m,dt){
   if(m.behavior==="boss")bossAI(m,dt,d);
 }
 function bossAI(m,dt,d){
+  const slime=m.bossType==="slime_king";
+  const tcol=slime?"#5fd35f":"#ff3c50";
   m.slamT-=dt; m.summonT-=dt;
   if(m.telegraph){
     m.telegraph.t-=dt;
     if(m.telegraph.t<=0){
       const {x,y,r}=m.telegraph;
-      burst(x,y,20,"#ff5e78"); sfx.boom(); addBoom(x,y,r); shake=Math.max(shake,5);
+      burst(x,y,20,slime?"#7dff9a":"#ff5e78"); sfx.boom();
+      addBoom(x,y,r,slime?"green":"orange"); shake=Math.max(shake,5);
       for(const h of party)if(!h.downed&&dist(h.x,h.y,x,y)<r)dealDamage(m,h,m.dmg*1.6);
       m.telegraph=null;
     }
@@ -654,13 +660,18 @@ function bossAI(m,dt,d){
   }
   if(m.slamT<=0&&d<400){
     const t=m.target;
-    m.telegraph={x:t.x,y:t.y,r:130,t:1.4};
-    addFloater(t.x,t.y-40,"INCOMING!","#ff5e78",18);
+    m.telegraph={x:t.x,y:t.y,r:130,t:1.4,col:tcol};
+    addFloater(t.x,t.y-40,slime?"SPLASH!":"INCOMING!",tcol,18);
     m.slamT=rand(10,14); sfx.roar();
   }
-  if(m.summonT<=0&&monsters.length<7){
-    for(let i=0;i<2;i++)spawnMonster("crypt_imp",clamp(Math.floor(m.x/TILE)+randi(-3,3),1,dung.gw-2),clamp(Math.floor(m.y/TILE)+randi(-3,3),1,dung.gh-2));
-    addFloater(m.x,m.y-50,"Minions, rise!","#c86bff",18);
+  if(m.summonT<=0&&monsters.length<(slime?8:7)){
+    if(slime){
+      for(let i=0;i<2;i++)spawnMonsterAt("slime",m.x+rand(-60,60),m.y+rand(-60,60));
+      addFloater(m.x,m.y-60,"SPLIT!","#7dff9a",18); sfx.level();
+    } else {
+      for(let i=0;i<2;i++)spawnMonster("crypt_imp",clamp(Math.floor(m.x/TILE)+randi(-3,3),1,dung.gw-2),clamp(Math.floor(m.y/TILE)+randi(-3,3),1,dung.gh-2));
+      addFloater(m.x,m.y-50,"Minions, rise!","#c86bff",18);
+    }
     m.summonT=rand(18,24);
   }
 }
@@ -1006,10 +1017,11 @@ function drawLoots(){
 function drawTelegraphs(){
   for(const m of monsters){
     if(m.telegraph&&tileVisible(Math.floor(m.x/TILE),Math.floor(m.y/TILE))){
-      const t=m.telegraph;
-      ctx.fillStyle="rgba(255,60,80,"+(0.25+0.2*Math.sin(elapsed*10)).toFixed(2)+")";
+      const t=m.telegraph, tc=t.col||"#ff3c50";
+      const glow=tc==="#5fd35f"?"95,211,95":"255,60,80";
+      ctx.fillStyle="rgba("+glow+","+(0.25+0.2*Math.sin(elapsed*10)).toFixed(2)+")";
       ctx.beginPath(); ctx.arc(t.x-cam.x,t.y-cam.y,t.r,0,Math.PI*2); ctx.fill();
-      ctx.strokeStyle="#ff3c50"; ctx.lineWidth=3;
+      ctx.strokeStyle=tc; ctx.lineWidth=3;
       ctx.beginPath(); ctx.arc(t.x-cam.x,t.y-cam.y,t.r,0,Math.PI*2); ctx.stroke();
     }
   }
@@ -1077,9 +1089,14 @@ function drawMonster(m){
     ctx.globalAlpha=0.72; // spooky translucency
     drawn=spr2("mon_ghost",x,y+12+hover,42,flip);
     ctx.globalAlpha=1;
-  } else { // boss: The Skeleton King
+  } else { // boss
     const pulse=1+Math.sin(elapsed*3)*0.04;
-    drawn=spr2("boss_skeleton_king",x,y+20,150*pulse,flip);
+    if(m.bossType==="slime_king"){
+      const sq=1+Math.sin(elapsed*6)*0.12;
+      drawn=spr2("mon_slime",x,y+16,135*pulse,flip,sq);
+    } else {
+      drawn=spr2("boss_skeleton_king",x,y+20,150*pulse,flip);
+    }
   }
   if(!drawn){ ctx.fillStyle=m.color; ctx.beginPath(); ctx.arc(x,y-10,R,0,Math.PI*2); ctx.fill(); }
   if(m.elite){ ctx.strokeStyle="rgba(200,110,255,0.85)"; ctx.lineWidth=3; ctx.setLineDash([8,6]);
@@ -1162,10 +1179,11 @@ function drawEffects(){
       ctx.beginPath(); ctx.arc(x,y,10+p*34,0,Math.PI*2); ctx.stroke();
       ctx.globalAlpha=1;
     } else if(f.kind==="boom"){
+      const grn=f.col==="green";
       ctx.globalAlpha=1-p;
-      ctx.fillStyle="rgba(255,190,90,0.75)";
+      ctx.fillStyle=grn?"rgba(120,230,120,0.75)":"rgba(255,190,90,0.75)";
       ctx.beginPath(); ctx.arc(x,y,f.r*p+12,0,Math.PI*2); ctx.fill();
-      ctx.strokeStyle="#ff9f2e"; ctx.lineWidth=5;
+      ctx.strokeStyle=grn?"#5fd35f":"#ff9f2e"; ctx.lineWidth=5;
       ctx.beginPath(); ctx.arc(x,y,f.r*(0.25+p*0.9),0,Math.PI*2); ctx.stroke();
       ctx.globalAlpha=1;
     } else if(f.kind==="scorch"){
@@ -1242,7 +1260,7 @@ function drawHUD(){
     ctx.fillStyle="rgba(10,6,16,0.8)"; ctx.beginPath(); ctx.roundRect(W/2-w/2,H-46,w,26,8); ctx.fill();
     ctx.fillStyle="#ff5e78"; ctx.fillRect(W/2-w/2+3,H-43,(w-6)*clamp(bossRef.hp/bossRef.maxhp,0,1),20);
     ctx.fillStyle="#fff"; ctx.font="bold 13px sans-serif"; ctx.textAlign="center";
-    ctx.fillText("THE SKELETON KING",W/2,H-28);
+    ctx.fillText(bossRef.name.toUpperCase(),W/2,H-28);
   }
 }
 function drawMinimap(){
@@ -1330,7 +1348,7 @@ function wrapText(text,x,y,maxW,lh){
 }
 function drawEnd(win){
   panel(win?"VICTORY!":"PARTY WIPED",
-    win?["The Skeleton King is defeated!","Time: "+fmtTime(elapsed),"Monsters beaten: "+kills,
+    win?[bossRef.name+" is defeated!","Time: "+fmtTime(elapsed),"Monsters beaten: "+kills,
          "Seed: "+seedShown,"Tap to delve a new dungeon"]
         :["Everyone got bonked...","Monsters beaten: "+kills,"Tap to try a new dungeon"],
     win?"#7dff9a":"#ff5e78");
