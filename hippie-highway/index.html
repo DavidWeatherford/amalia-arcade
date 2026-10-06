@@ -121,7 +121,7 @@ let obstacles = [];   // {lane, t, ci (color idx), passed}
 let spawnT = 0, lastBlocked = [], dashPhase = 0, beatT = 0;
 let roadside = [];    // {side:-1|1, off, t, kind, s}
 let particles = [], popups = [];
-let shake = 0, backBtn = null;
+let shake = 0, backBtn = null, mpBtn = null;
 
 const CAR_COLORS = [
   { body: "#d94040", dark: "#a52f2f" },
@@ -200,6 +200,8 @@ canvas.addEventListener("pointerdown", e => {
   const x = e.clientX || 0, y = e.clientY || 0;
   if (backBtn && x >= backBtn.x && x <= backBtn.x + backBtn.w &&
       y >= backBtn.y && y <= backBtn.y + backBtn.h) { window.location.href = "../"; return; }
+  if (state === STATE.TITLE && mpBtn && x >= mpBtn.x && x <= mpBtn.x + mpBtn.w &&
+      y >= mpBtn.y && y <= mpBtn.y + mpBtn.h) { window.location.href = "multiplayer.html"; return; }
   if (state !== STATE.PLAYING) { startGame(); return; }
   moveLane(x < W / 2 ? -1 : 1);
 });
@@ -575,6 +577,7 @@ function draw() {
   drawPopups();
   drawBackButton();
   if (state === STATE.PLAYING) drawHUD();
+  mpBtn = null;
   if (state === STATE.TITLE) {
     const panel = drawPanel("HIGHWAY MANIA", [
       "Dodge the traffic in your groovy van!",
@@ -583,6 +586,15 @@ function draw() {
     ], "#ffd23f", "TAP OR PRESS SPACE TO ROLL");
     // show off the van above the panel
     drawVan(W / 2, panel.y - 64, VAN_S * 1.7, Math.sin(performance.now() / 400) * 0.4, false);
+    // multiplayer button below the panel
+    const bw = 300, bh = 52, bx = W / 2 - bw / 2, by = panel.y + panel.h + 18;
+    ctx.fillStyle = "#5fb4e8";
+    rr(bx, by, bw, bh, 16); ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.font = "800 20px -apple-system, sans-serif"; ctx.textAlign = "center";
+    ctx.fillText("👥 MULTIPLAYER (2–4)", W / 2, by + 34);
+    ctx.textAlign = "left";
+    mpBtn = { x: bx, y: by, w: bw, h: bh };
   } else if (state === STATE.OVER) {
     drawHUD();
     drawPanel("WIPEOUT!", [
