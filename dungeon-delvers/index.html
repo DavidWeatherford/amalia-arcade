@@ -136,7 +136,7 @@ function spr(name,x,y,dw,dh,frame,flip){
   ctx.drawImage(SHEET,t[0]+f*t[2],t[1],t[2],t[3],Math.round(-dw/2),Math.round(-dh),dw,dh);
   ctx.restore(); return true;
 }
-const CLASS_SPR={warrior:"hero_warrior",mage:"hero_mage",cleric:"hero_cleric"}; // ART: custom 32px-style heroes
+const CLASS_SPR={warrior:"hero_warrior",mage:"hero_mage",cleric:"hero_cleric",ranger:"hero_ranger"}; // ART: custom 32px-style heroes
 function sprFrame(name,frame,sx,sy,size){
   const t=SPR[name]; if(!t||!sheetReady)return false;
   const f=((frame||0)%t[4]+t[4])%t[4];
@@ -191,6 +191,9 @@ const CLASSES={
   cleric:{ name:"Cleric", color:"#ffd76b", hp:105, atk:7, def:3, speed:190, range:260, atkCd:1.4,
     threatMul:0.8, ability:"Heal Burst", abilityDesc:"Heal the whole party",
     desc:"Healer. Keeps everyone standing." },
+  ranger:{ name:"Ranger", color:"#6bff9e", hp:100, atk:12, def:3, speed:200, range:320, atkCd:1.3,
+    threatMul:1.0, ability:"Multi-Shot", abilityDesc:"Fan of 3 arrows",
+    desc:"Archer. Fast arrows, deadeye aim." },
 };
 
 // ================= DUNGEON GENERATION =================
@@ -369,9 +372,10 @@ function startRun(clsKey){
   dung=genDungeon(seedShown);
   party=[]; monsters=[]; projectiles=[]; loots=[]; floaters=[]; particles=[];
   elapsed=0; kills=0; bossSpawned=false; bossRef=null; runBossKey=choice(Object.keys(BOSSES));
-  const order=["warrior","mage","cleric"];
+  const others=["warrior","mage","cleric","ranger"].filter(k=>k!==clsKey);
+  for(let i=others.length-1;i>0;i--){ const j=(rng()*(i+1))|0; const t=others[i]; others[i]=others[j]; others[j]=t; }
   const r0=dung.rooms[0];
-  order.forEach((ck,i)=>{
+  [clsKey,others[0],others[1]].forEach((ck,i)=>{
     const h=makeHero(ck,ck===clsKey,i);
     h.x=dung.px(r0.cx-2+i*2); h.y=dung.py(r0.cy);
     h.anchor=h; party.push(h);
@@ -501,6 +505,14 @@ function useAbility(h,tx,ty){
     h.abilityCd=12;
     for(const p of party)healTarget(h,p,35+h.level*6);
     addFloater(h.x,h.y-36,"HEAL BURST!","#7dff9a",18); return true;
+  } else if(h.cls==="ranger"){
+    if(tx===undefined)return "target";
+    h.abilityCd=10;
+    const a=Math.atan2(ty-h.y,tx-h.x), atk=heroStats(h).atk*1.6;
+    for(const off of [-0.22,0,0.22])
+      projectiles.push({x:h.x,y:h.y,vx:Math.cos(a+off)*560,vy:Math.sin(a+off)*560,r:6,
+        dmg:atk,friendly:true,aoe:0,color:"#6bff9e",from:h,kind:"arrow"});
+    addFloater(h.x,h.y-36,"MULTI-SHOT!","#6bff9e",18); sfx.shoot(); return true;
   }
 }
 // ================= MOVEMENT & AI (free steering, no grid) =================
@@ -546,10 +558,12 @@ function basicAttack(att,dst){
   const st=att.kind==="hero"?heroStats(att):{atk:att.dmg};
   att.face=Math.atan2(dst.y-att.y,dst.x-att.x);
   if(att.kind==="hero"&&CLASSES[att.cls].range>120){
-    // ranged: fire projectile
+    // ranged: fire projectile (ranger looses arrows, mage/cleric bolts)
     const a=Math.atan2(dst.y-att.y,dst.x-att.x);
-    projectiles.push({x:att.x,y:att.y,vx:Math.cos(a)*460,vy:Math.sin(a)*460,r:6,
-      dmg:st.atk,friendly:true,aoe:0,color:att.cls==="mage"?"#c86bff":"#ffe9a8",from:att,kind:"bolt",target:dst});
+    const arrow=att.cls==="ranger";
+    projectiles.push({x:att.x,y:att.y,vx:Math.cos(a)*(arrow?560:460),vy:Math.sin(a)*(arrow?560:460),r:6,
+      dmg:st.atk,friendly:true,aoe:0,color:arrow?"#6bff9e":att.cls==="mage"?"#c86bff":"#ffe9a8",
+      from:att,kind:arrow?"arrow":"bolt",target:dst});
     sfx.shoot();
   } else {
     const la=Math.atan2(dst.y-att.y,dst.x-att.x);
@@ -590,9 +604,9 @@ function npcAI(h,dt){
     }
     h.atkTarget=null; followAnchor(h); return;
   }
-  if(h.cls==="mage"){
+  if(h.cls==="mage"||h.cls==="ranger"){
     if(nm){
-      // fireball the biggest clump every so often
+      // fireball / multi-shot the biggest clump every so often
       if(h.abilityCd<=0&&monsters.length>=2){
         let bx=nm.x,by=nm.y,bc=0;
         for(const m of monsters){ let c=0; for(const m2 of monsters)if(dist(m.x,m.y,m2.x,m2.y)<110)c++; if(c>bc){bc=c;bx=m.x;by=m.y;} }
@@ -705,13 +719,13 @@ function onTap(px,py){
   // ability button?
   const bx=W-70,by=H-90;
   if(dist(px,py,bx,by)<56){
-    if(me.cls==="mage"){ abilityTargeting=true; addFloater(me.x,me.y-40,"Tap a spot!","#ff9f2e",16); }
+    if(me.cls==="mage"||me.cls==="ranger"){ abilityTargeting=true; addFloater(me.x,me.y-40,"Tap a spot!","#ff9f2e",16); }
     else useAbility(me);
     return;
   }
   // world coords
   const wx=px+cam.x, wy=py+cam.y;
-  if(abilityTargeting&&me.cls==="mage"){ abilityTargeting=false; useAbility(me,wx,wy); return; }
+  if(abilityTargeting&&(me.cls==="mage"||me.cls==="ranger")){ abilityTargeting=false; useAbility(me,wx,wy); return; }
   // tap a monster? -> attack it
   let bestM=null,bd=52;
   for(const m of monsters){ const d=dist(wx,wy,m.x,m.y); if(d<bd+m.r){bd=d;bestM=m;} }
@@ -787,7 +801,7 @@ function update(dt){
       p.vx=Math.cos(na)*sp; p.vy=Math.sin(na)*sp;
     }
     if(p.kind==="fireball")particles.push({x:p.x+rand(-5,5),y:p.y+rand(-5,5),vx:rand(-50,50),vy:rand(-60,10),t:0,life:rand(0.25,0.45),color:choice(["#ff9f2e","#ff6b2e","#ffd76b"])});
-    else if(p.kind==="bolt")particles.push({x:p.x,y:p.y,vx:rand(-15,15),vy:rand(-15,15),t:0,life:0.2,color:p.color});
+    else if(p.kind==="bolt"||p.kind==="arrow")particles.push({x:p.x,y:p.y,vx:rand(-15,15),vy:rand(-15,15),t:0,life:0.2,color:p.color});
     p.x+=p.vx*dt; p.y+=p.vy*dt; p.life=(p.life||3)-dt;
     let hit=false;
     if(p.kind==="fireball"&&dist(p.x,p.y,p.tx,p.ty)<24){ hit=true; } // reached target -> boom
@@ -1150,9 +1164,9 @@ function drawProjectiles(){
       g.addColorStop(0,"#fff2c8"); g.addColorStop(0.45,"#ff9f2e"); g.addColorStop(1,"rgba(255,80,20,0)");
       ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,17,0,Math.PI*2); ctx.fill();
       ctx.fillStyle="#fff2c8"; ctx.beginPath(); ctx.arc(x,y,5,0,Math.PI*2); ctx.fill();
-    } else if(p.kind==="bone"){
+    } else if(p.kind==="bone"||p.kind==="arrow"){
       const a=Math.atan2(p.vy,p.vx);
-      ctx.strokeStyle="#e8e0c0"; ctx.lineWidth=4; ctx.lineCap="round";
+      ctx.strokeStyle=p.kind==="arrow"?"#6bff9e":"#e8e0c0"; ctx.lineWidth=4; ctx.lineCap="round";
       ctx.beginPath(); ctx.moveTo(x-Math.cos(a)*15,y-Math.sin(a)*15); ctx.lineTo(x,y); ctx.stroke();
       ctx.fillStyle="#fff"; ctx.beginPath(); ctx.arc(x,y,3,0,Math.PI*2); ctx.fill();
     } else {
@@ -1247,10 +1261,10 @@ function drawHUD(){
     ctx.beginPath(); ctx.arc(bx,by,44,0,Math.PI*2); ctx.fill();
     ctx.strokeStyle="#fff"; ctx.lineWidth=3; ctx.beginPath(); ctx.arc(bx,by,44,0,Math.PI*2); ctx.stroke();
     ctx.fillStyle="#1a1a22"; ctx.font="bold 13px sans-serif"; ctx.textAlign="center";
-    const label=me.cls==="warrior"?"SHIELD":me.cls==="mage"?"FIRE":"HEAL";
+    const label=me.cls==="warrior"?"SHIELD":me.cls==="mage"?"FIRE":me.cls==="ranger"?"ARROWS":"HEAL";
     ctx.fillText(label,bx,by-4);
     if(me.abilityCd>0){ ctx.fillStyle="#fff"; ctx.font="bold 18px sans-serif"; ctx.fillText(Math.ceil(me.abilityCd),bx,by+16); }
-    else if(me.cls==="mage"&&abilityTargeting){ ctx.fillStyle="#ff9f2e"; ctx.font="bold 12px sans-serif"; ctx.fillText("tap a spot",bx,by+16); }
+    else if((me.cls==="mage"||me.cls==="ranger")&&abilityTargeting){ ctx.fillStyle="#ff9f2e"; ctx.font="bold 12px sans-serif"; ctx.fillText("tap a spot",bx,by+16); }
     ctx.fillStyle="rgba(255,233,168,0.9)"; ctx.font="11px sans-serif"; ctx.textAlign="center";
     ctx.fillText(CLASSES[me.cls].ability+": "+CLASSES[me.cls].abilityDesc,bx,by+62);
   }
@@ -1314,10 +1328,15 @@ function drawPick(){
   ctx.fillText("CHOOSE YOUR HERO",W/2,90);
   ctx.fillStyle="#cfc3e8"; ctx.font="16px sans-serif";
   ctx.fillText("The others join you as companions",W/2,120);
-  const cw=Math.min(220,(W-60)/3-16);
-  ["warrior","mage","cleric"].forEach((k,i)=>{
+  const keys=["warrior","mage","cleric","ranger"];
+  const cols=W<760?2:4, rows=Math.ceil(keys.length/cols);
+  const cw=Math.min(220,(W-60)/cols-16), ch=330, gap=16;
+  const gw2=cols*(cw+gap)-gap, gh2=rows*(ch+gap)-gap;
+  const ox=W/2-gw2/2, oy=150;
+  keys.forEach((k,i)=>{
     const c=CLASSES[k];
-    const x=W/2-((cw+16)*3)/2+i*(cw+16)+8, y=150, h=330;
+    const cx=i%cols, cy=(i/cols)|0;
+    const x=ox+cx*(cw+gap), y=oy+cy*(ch+gap), h=ch;
     ctx.fillStyle="rgba(20,12,32,0.95)"; ctx.beginPath(); ctx.roundRect(x,y,cw,h,16); ctx.fill();
     ctx.strokeStyle=c.color; ctx.lineWidth=4; ctx.beginPath(); ctx.roundRect(x,y,cw,h,16); ctx.stroke();
     ctx.fillStyle="rgba(0,0,0,0.45)"; ctx.beginPath(); ctx.ellipse(x+cw/2,y+116,34,10,0,0,Math.PI*2); ctx.fill();
@@ -1334,8 +1353,9 @@ function drawPick(){
     else ctx.fillText(ab,x+cw/2,y+296);
     canvas._pick=i;
   });
-  canvas._pickRects=["warrior","mage","cleric"].map((k,i)=>{
-    const x=W/2-((cw+16)*3)/2+i*(cw+16)+8; return {k,x,y:150,w:cw,h:330};
+  canvas._pickRects=keys.map((k,i)=>{
+    const cx=i%cols, cy=(i/cols)|0;
+    const x=ox+cx*(cw+gap), y=oy+cy*(ch+gap); return {k,x,y,w:cw,h:ch};
   });
 }
 function wrapText(text,x,y,maxW,lh){
