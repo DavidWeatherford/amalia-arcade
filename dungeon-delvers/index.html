@@ -1,0 +1,980 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Dungeon Delvers (Prototype)</title>
+<style>
+  html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#0b0714;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    -webkit-user-select:none; user-select:none; touch-action:none; }
+  canvas { display:block; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+"use strict";
+// ================= DUNGEON DELVERS — co-op dungeon crawler prototype =================
+// Tap to move, tap a monster to attack it, tap an ally to heal/move to them.
+
+// ---------- tiny utils ----------
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+let rng = mulberry32((Math.random()*1e9)|0);
+const rand=(a,b)=>a+rng()*(b-a);
+const randi=(a,b)=>Math.floor(rand(a,b+1));
+const choice=arr=>arr[(rng()*arr.length)|0];
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const dist=(x1,y1,x2,y2)=>Math.hypot(x2-x1,y2-y1);
+
+// ---------- audio ----------
+const sfx=(()=>{
+  let ac=null;
+  function ctx(){ if(!ac){ try{ ac=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } if(ac&&ac.state==="suspended")ac.resume(); return ac; }
+  function tone(f,d,type,vol,slide){ const c=ctx(); if(!c)return; const t=c.currentTime;
+    const o=c.createOscillator(),g=c.createGain(); o.type=type||"sine"; o.frequency.setValueAtTime(f,t);
+    if(slide)o.frequency.exponentialRampToValueAtTime(Math.max(30,slide),t+d);
+    g.gain.setValueAtTime(vol||0.12,t); g.gain.exponentialRampToValueAtTime(0.0001,t+d);
+    o.connect(g); g.connect(c.destination); o.start(t); o.stop(t+d+0.02); }
+  return {
+    unlock(){ ctx(); },
+    swing(){ tone(300,0.08,"triangle",0.06,140); },
+    hit(){ tone(180,0.1,"square",0.08,90); },
+    shoot(){ tone(700,0.09,"sawtooth",0.05,300); },
+    boom(){ tone(120,0.35,"sawtooth",0.14,40); },
+    heal(){ tone(520,0.25,"sine",0.1,880); },
+    loot(){ tone(880,0.12,"triangle",0.1,1320); },
+    level(){ [523,659,784].forEach((f,i)=>setTimeout(()=>tone(f,0.15,"triangle",0.1),i*90)); },
+    die(){ tone(220,0.4,"sawtooth",0.1,60); },
+    roar(){ tone(90,0.6,"sawtooth",0.16,45); },
+    step(){ tone(200+Math.random()*80,0.04,"sine",0.025); },
+    click(){ tone(600,0.06,"triangle",0.08); },
+  };
+})();
+
+// ---------- canvas ----------
+const canvas=document.getElementById("game"), ctx=canvas.getContext("2d");
+if(typeof CanvasRenderingContext2D!=="undefined"&&!CanvasRenderingContext2D.prototype.roundRect){
+  CanvasRenderingContext2D.prototype.roundRect=function(x,y,w,h,r){ r=Math.min(r,w/2,h/2);
+    this.moveTo(x+r,y); this.arcTo(x+w,y,x+w,y+h,r); this.arcTo(x+w,y+h,x,y+h,r);
+    this.arcTo(x,y+h,x,y,r); this.arcTo(x,y,x+w,y,r); this.closePath(); return this; };
+}
+let W=0,H=0,DPR=1,groundY=0;
+function resize(){ DPR=Math.min(window.devicePixelRatio||1,2); W=window.innerWidth; H=window.innerHeight;
+  canvas.width=Math.round(W*DPR); canvas.height=Math.round(H*DPR);
+  canvas.style.width=W+"px"; canvas.style.height=H+"px"; ctx.setTransform(DPR,0,0,DPR,0,0); }
+window.addEventListener("resize",resize); resize();
+
+// ================= CONTENT REGISTRY =================
+// Weekly ritual: add entries here. The generator picks them up automatically.
+const TILE=48;
+const BESTIARY={
+  crypt_bat:{ name:"Crypt Bat", hp:26, speed:120, dmg:5, range:44, atkCd:1.1, xp:8,
+    behavior:"chaser", r:14, color:"#7a5fa8",
+    desc:"Flutters straight at you." },
+  skeleton_archer:{ name:"Skeleton Archer", hp:34, speed:85, dmg:7, range:300, atkCd:2.4, xp:12,
+    behavior:"shooter", r:15, color:"#cfc39a",
+    desc:"Keeps its distance and fires bones." },
+};
+const TRAPS={
+  spikes:{ name:"Spike Trap", dmg:10, desc:"Telegraphed floor spikes." },
+};
+const BOSSES={
+  crypt_keeper:{ name:"The Crypt Keeper", hp:420, speed:70, dmg:12, r:30, color:"#5e2f8f", xp:80,
+    desc:"Slams the ground and calls his bats." },
+};
+const LOOT_TABLE=[
+  { kind:"weapon", stat:"atk", min:2, max:5, name:"Rusty Sword" },
+  { kind:"weapon", stat:"atk", min:4, max:8, name:"Moonlit Blade" },
+  { kind:"armor",  stat:"def", min:1, max:4, name:"Old Shield" },
+  { kind:"armor",  stat:"def", min:3, max:6, name:"Gargoyle Plate" },
+  { kind:"charm",  stat:"maxhp", min:15, max:35, name:"Heart Locket" },
+];
+const RARITY=[ {n:"Common",c:"#b8b8c8",mult:1}, {n:"Magic",c:"#5aa9ff",mult:1.6}, {n:"Epic",c:"#c86bff",mult:2.4} ];
+
+const CLASSES={
+  warrior:{ name:"Warrior", color:"#4a90d9", hp:120, atk:9, def:6, speed:200, range:64, atkCd:0.9,
+    threatMul:2.0, ability:"Shield Wall", abilityDesc:"5s: half damage, taunt all",
+    desc:"Tank. Draws aggro, shrugs off hits." },
+  mage:{ name:"Mage", color:"#a86bff", hp:70, atk:18, def:2, speed:200, range:300, atkCd:1.2,
+    threatMul:1.0, ability:"Fireball", abilityDesc:"Tap a spot: big boom",
+    desc:"Glass cannon. Huge damage, fragile." },
+  cleric:{ name:"Cleric", color:"#ffd76b", hp:85, atk:7, def:3, speed:200, range:260, atkCd:1.1,
+    threatMul:0.8, ability:"Heal Burst", abilityDesc:"Heal the whole party",
+    desc:"Healer. Keeps everyone standing." },
+};
+
+// ================= DUNGEON GENERATION =================
+// Linear chain: start room -> combat room(s) -> boss room, connected by corridors.
+let dung=null; // {gw,gh,tiles,fog,rooms,seed}
+function genDungeon(seed){
+  rng=mulberry32(seed);
+  const gw=64, gh=40;
+  const tiles=new Uint8Array(gw*gh); // 0 wall, 1 floor
+  const fog=new Uint8Array(gw*gh);   // 0 unseen, 1 explored, 2 visible
+  const rooms=[];
+  const tAt=(x,y)=>(x<0||y<0||x>=gw||y>=gh)?0:tiles[y*gw+x];
+  function carveRoom(cx,cy,w,h){
+    const r={x:cx-((w/2)|0),y:cy-((h/2)|0),w,h,cx,cy};
+    for(let y=r.y;y<r.y+h;y++)for(let x=r.x;x<r.x+w;x++)tiles[y*gw+x]=1;
+    rooms.push(r); return r;
+  }
+  function carveCorridor(x1,y1,x2,y2){
+    let x=x1,y=y1;
+    while(x!==x2){ tiles[y*gw+x]=1; tiles[clamp(y+1,0,gh-1)*gw+x]=1; x+=Math.sign(x2-x); }
+    while(y!==y2){ tiles[y*gw+x]=1; tiles[y*gw+clamp(x+1,0,gw-1)]=1; y+=Math.sign(y2-y); }
+    tiles[y*gw+x]=1;
+  }
+  const start=carveRoom(10,20,11,9);
+  const mid1=carveRoom(28,20,13,11);
+  const mid2=carveRoom(46,20,12,10);
+  const bossR=carveRoom(55,20,11,11);
+  carveCorridor(start.cx,start.cy,mid1.cx,mid1.cy);
+  carveCorridor(mid1.cx,mid1.cy,mid2.cx,mid2.cy);
+  carveCorridor(mid2.cx,mid2.cy,bossR.cx,bossR.cy);
+  rooms[1].type="combat"; rooms[2].type="combat"; rooms[3].type="boss"; rooms[0].type="start";
+  // traps in corridors/mid rooms
+  const traps=[];
+  for(const r of [rooms[1],rooms[2]]){
+    const n=randi(2,4);
+    for(let i=0;i<n;i++){
+      const tx=randi(r.x+1,r.x+r.w-2), ty=randi(r.y+1,r.y+r.h-2);
+      traps.push({tx,ty,kind:"spikes",t:rand(0,3),state:0,cd:0}); // state 0 idle,1 warning,2 striking
+    }
+  }
+  return {gw,gh,tiles,fog,explored:new Uint8Array(gw*gh),rooms,traps,seed,
+    px:(tx)=>(tx+0.5)*TILE, py:(ty)=>(ty+0.5)*TILE,
+    tileAt:(px,py)=>{ const tx=Math.floor(px/TILE),ty=Math.floor(py/TILE); return (tx<0||ty<0||tx>=gw||ty>=gh)?0:tiles[ty*gw+tx]; } };
+}
+// BFS pathfinding on the tile grid
+function findPath(sx,sy,tx,ty){
+  const {gw,gh,tiles}=dung;
+  const stx=clamp(Math.floor(sx/TILE),0,gw-1), sty=clamp(Math.floor(sy/TILE),0,gh-1);
+  const etx=clamp(Math.floor(tx/TILE),0,gw-1), ety=clamp(Math.floor(ty/TILE),0,gh-1);
+  if(!tiles[ety*gw+etx]){ // nudge target to nearest floor
+    let best=null,bd=1e9;
+    for(let y=0;y<gh;y++)for(let x=0;x<gw;x++) if(tiles[y*gw+x]){ const d=Math.abs(x-etx)+Math.abs(y-ety); if(d<bd){bd=d;best=[x,y];} }
+    if(!best)return null;
+    return findPath(sx,sy,(best[0]+0.5)*TILE,(best[1]+0.5)*TILE);
+  }
+  const prev=new Int32Array(gw*gh).fill(-1);
+  const q=[sty*gw+stx]; prev[sty*gw+stx]=sty*gw+stx;
+  while(q.length){
+    const cur=q.shift(); const cx=cur%gw, cy=(cur/gw)|0;
+    if(cx===etx&&cy===ety)break;
+    for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
+      const nx=cx+dx,ny=cy+dy;
+      if(nx<0||ny<0||nx>=gw||ny>=gh||!tiles[ny*gw+nx]||prev[ny*gw+nx]!==-1)continue;
+      prev[ny*gw+nx]=cur; q.push(ny*gw+nx);
+    }
+  }
+  if(prev[ety*gw+etx]===-1)return null;
+  const path=[]; let cur=ety*gw+etx;
+  while(cur!==sty*gw+stx){ path.push(cur); cur=prev[cur]; }
+  path.reverse();
+  return path.map(c=>({x:(c%gw+0.5)*TILE, y:(((c/gw)|0)+0.5)*TILE}));
+}
+// line of sight for fog of war
+function hasLOS(x0,y0,x1,y1){
+  const {gw,gh,tiles}=dung;
+  let tx0=Math.floor(x0/TILE),ty0=Math.floor(y0/TILE);
+  const tx1=Math.floor(x1/TILE),ty1=Math.floor(y1/TILE);
+  let dx=Math.abs(tx1-tx0),dy=Math.abs(ty1-ty0);
+  const sx=tx0<tx1?1:-1, sy=ty0<ty1?1:-1;
+  let err=dx-dy;
+  while(true){
+    if(tx0===tx1&&ty0===ty1)return true;
+    if(tiles[ty0*gw+tx0]===0)return false;
+    const e2=2*err;
+    if(e2>-dy){err-=dy;tx0+=sx;} if(e2<dx){err+=dx;ty0+=sy;}
+  }
+}
+const FOG_R=6*TILE;
+let fogTimer=0;
+function updateFog(dt){
+  fogTimer-=dt; if(fogTimer>0)return; fogTimer=0.2;
+  const {gw,gh,fog}=dung;
+  fog.fill(0);
+  // explored persists via a second array
+  for(let i=0;i<fog.length;i++) if(dung.explored[i]) fog[i]=1;
+  for(const e of party){
+    if(e.downed)continue;
+    const etx=Math.floor(e.x/TILE),ety=Math.floor(e.y/TILE);
+    const rT=Math.ceil(FOG_R/TILE);
+    for(let ty=ety-rT;ty<=ety+rT;ty++)for(let tx=etx-rT;tx<=etx+rT;tx++){
+      if(tx<0||ty<0||tx>=gw||ty>=gh)continue;
+      const wx=(tx+0.5)*TILE,wy=(ty+0.5)*TILE;
+      if(dist(e.x,e.y,wx,wy)>FOG_R)continue;
+      if(!hasLOS(e.x,e.y,wx,wy))continue;
+      fog[ty*gw+tx]=2; dung.explored[ty*gw+tx]=1;
+    }
+  }
+}
+
+
+// ================= ENTITIES =================
+let party=[], monsters=[], projectiles=[], loots=[], floaters=[], particles=[];
+let cam={x:0,y:0}, elapsed=0, kills=0, bossSpawned=false, bossRef=null;
+let state="title"; // title | pick | play | win | lose
+let seedShown=0;
+
+function makeHero(clsKey,isPlayer,idx){
+  const c=CLASSES[clsKey];
+  return { kind:"hero", cls:clsKey, isPlayer, name:c.name+(isPlayer?" (You)":""),
+    x:0,y:0, r:18, color:c.color, maxhp:c.hp, hp:c.hp, atk:c.atk, def:c.def,
+    speed:c.speed, range:c.range, atkCd:c.atkCd, atkT:0, threatMul:c.threatMul,
+    level:1, xp:0, xpNext:30, path:null, moveT:null, atkTarget:null,
+    downed:false, reviveT:0, reviveBy:null, abilityCd:0, shieldT:0,
+    aiT:rand(0,0.3), anchor:null, wob:rand(0,6), gearAtk:0, gearDef:0, gearHp:0 };
+}
+function heroStats(h){ return { atk:h.atk+h.gearAtk+(h.level-1)*2, def:h.def+h.gearDef+(h.level-1)*1,
+  maxhp:h.maxhp+h.gearHp+(h.level-1)*18 }; }
+
+function spawnMonster(type,tx,ty){
+  const b=BESTIARY[type];
+  monsters.push({ kind:"mon", type, name:b.name, x:dung.px(tx), y:dung.py(ty), r:b.r,
+    maxhp:b.hp, hp:b.hp, dmg:b.dmg, speed:b.speed, range:b.range, atkCd:b.atkCd, atkT:rand(0,1),
+    xp:b.xp, behavior:b.behavior, color:b.color, threat:{}, target:null, wob:rand(0,6), hitT:0 });
+}
+function spawnBoss(){
+  const b=BOSSES.crypt_keeper, r=dung.rooms[3];
+  const m={ kind:"boss", type:"crypt_keeper", name:b.name, x:dung.px(r.cx), y:dung.py(r.cy), r:b.r,
+    maxhp:b.hp, hp:b.hp, dmg:b.dmg, speed:b.speed, range:70, atkCd:1.4, atkT:0,
+    xp:b.xp, behavior:"boss", color:b.color, threat:{}, target:null, wob:0, hitT:0,
+    slamT:6, summonT:10, telegraph:null };
+  monsters.push(m); bossRef=m; sfx.roar();
+  addFloater(m.x,m.y-50,"THE CRYPT KEEPER","#ff5e78",26);
+}
+function populateRooms(){
+  for(const r of dung.rooms){
+    if(r.type!=="combat")continue;
+    const n=randi(3,5);
+    for(let i=0;i<n;i++){
+      const tx=randi(r.x+1,r.x+r.w-2), ty=randi(r.y+1,r.y+r.h-2);
+      spawnMonster(rng()<0.6?"crypt_bat":"skeleton_archer",tx,ty);
+    }
+  }
+}
+function startRun(clsKey){
+  seedShown=(Math.random()*1e9)|0;
+  dung=genDungeon(seedShown);
+  party=[]; monsters=[]; projectiles=[]; loots=[]; floaters=[]; particles=[];
+  elapsed=0; kills=0; bossSpawned=false; bossRef=null;
+  const order=["warrior","mage","cleric"];
+  const r0=dung.rooms[0];
+  order.forEach((ck,i)=>{
+    const h=makeHero(ck,ck===clsKey,i);
+    h.x=dung.px(r0.cx-2+i*2); h.y=dung.py(r0.cy);
+    h.anchor=h; party.push(h);
+  });
+  // companions anchor to the player
+  const me=party.find(h=>h.isPlayer);
+  party.forEach(h=>{ if(!h.isPlayer)h.anchor=me; });
+  populateRooms();
+  state="play"; sfx.click();
+}
+function addFloater(x,y,text,color,size){
+  floaters.push({x,y,text,color:color||"#fff",size:size||16,t:0,life:1.4});
+}
+function burst(x,y,n,color){
+  for(let i=0;i<n;i++)particles.push({x,y,vx:rand(-160,160),vy:rand(-200,40),t:0,life:rand(0.3,0.7),color});
+}
+
+// ---------- damage / healing ----------
+function dealDamage(src,dst,amount){
+  if(dst.downed||dst.hp<=0)return;
+  let dmg=Math.max(1,Math.round(amount-(dst.def||0)*0.6));
+  if(dst.kind==="hero"&&dst.shieldT>0)dmg=Math.max(1,Math.round(dmg*0.4));
+  dst.hp-=dmg; dst.hitT=0.15;
+  addFloater(dst.x+rand(-8,8),dst.y-dst.r-6,"-"+dmg,dst.kind==="hero"?"#ff6b7a":"#ffe9a8",15);
+  burst(dst.x,dst.y,4,dst.kind==="hero"?"#ff6b7a":"#ffd76b");
+  if(dst.kind==="mon"||dst.kind==="boss"){
+    const th=dst.threat;
+    const key=src.cls||"mon";
+    th[key]=(th[key]||0)+amount*(src.threatMul||1);
+    if(src.cls==="warrior"&&src.shieldT>0)th[key]+=100; // taunt
+    retarget(dst);
+  }
+  sfx.hit();
+  if(dst.hp<=0){
+    dst.hp=0;
+    if(dst.kind==="hero"){ dst.downed=true; dst.path=null; dst.atkTarget=null;
+      addFloater(dst.x,dst.y-30,"DOWN!","#ff5e78",20); sfx.die();
+      if(party.every(h=>h.downed)){ state="lose"; }
+    } else {
+      kills++; sfx.die();
+      burst(dst.x,dst.y,14,"#c86bff");
+      gainXP(dst.xp);
+      maybeDropLoot(dst);
+      monsters.splice(monsters.indexOf(dst),1);
+      if(dst.kind==="boss"){ state="win"; }
+    }
+  }
+}
+function healTarget(src,dst,amount){
+  if(dst.downed||dst.hp<=0)return;
+  const st=heroStats(dst);
+  const real=Math.min(amount,st.maxhp-dst.hp);
+  if(real<=0)return;
+  dst.hp+=real;
+  addFloater(dst.x,dst.y-dst.r-6,"+"+Math.round(real),"#7dff9a",15);
+  burst(dst.x,dst.y,6,"#7dff9a"); sfx.heal();
+}
+function retarget(m){
+  let best=null,bs=-1;
+  for(const h of party){ if(h.downed)continue;
+    const t=(m.threat[h.cls]||0)+ (h.cls==="warrior"?15:0); // warriors draw aggro naturally
+    if(t>bs){bs=t;best=h;} }
+  if(!best)best=party.find(h=>!h.downed);
+  m.target=best;
+}
+function gainXP(n){
+  for(const h of party){
+    if(h.downed)continue;
+    h.xp+=n;
+    while(h.xp>=h.xpNext){
+      h.xp-=h.xpNext; h.level++; h.xpNext=Math.round(h.xpNext*1.5);
+      const st=heroStats(h); h.hp=st.maxhp;
+      addFloater(h.x,h.y-34,"LEVEL "+h.level+"!","#ffe9a8",20); sfx.level();
+      burst(h.x,h.y,16,"#ffe9a8");
+    }
+  }
+}
+function maybeDropLoot(m){
+  const chance=m.kind==="boss"?1:0.28;
+  if(rng()>chance)return;
+  const t=choice(LOOT_TABLE), rar=m.kind==="boss"?RARITY[2]:choice(RARITY);
+  const val=Math.round(rand(t.min,t.max)*rar.mult);
+  loots.push({x:m.x+rand(-20,20),y:m.y+rand(-20,20),kind:t.kind,stat:t.stat,val,
+    name:rar.n+" "+t.name,rar,t:0});
+}
+function pickupLoot(h,l){
+  const better = l.stat==="atk" ? l.val>h.gearAtk : l.stat==="def" ? l.val>h.gearDef : l.val>h.gearHp;
+  if(better){
+    if(l.stat==="atk")h.gearAtk=l.val; else if(l.stat==="def")h.gearDef=l.val; else h.gearHp=l.val;
+    const st=heroStats(h);
+    addFloater(h.x,h.y-34,l.name+"!","#5aa9ff",16); sfx.loot();
+    burst(h.x,h.y,10,"#5aa9ff");
+  } else {
+    healTarget(h,h,15); // spare loot becomes a snack
+    addFloater(h.x,h.y-30,"+snack","#7dff9a",13);
+  }
+}
+
+// ---------- abilities ----------
+function useAbility(h,tx,ty){
+  if(h.abilityCd>0||h.downed)return false;
+  const c=CLASSES[h.cls];
+  if(h.cls==="warrior"){
+    h.shieldT=5; h.abilityCd=14;
+    for(const m of monsters){ m.threat[h.cls]=(m.threat[h.cls]||0)+150; retarget(m); }
+    addFloater(h.x,h.y-36,"SHIELD WALL!","#4a90d9",18); sfx.boom(); return true;
+  } else if(h.cls==="mage"){
+    if(tx===undefined)return "target";
+    h.abilityCd=9;
+    // fireball projectile to the spot, explodes
+    const a=Math.atan2(ty-h.y,tx-h.x);
+    projectiles.push({x:h.x,y:h.y,tx,ty,vx:Math.cos(a)*520,vy:Math.sin(a)*520,r:8,
+      dmg:heroStats(h).atk*2.2,friendly:true,aoe:90,color:"#ff9f2e",from:h,kind:"fireball"});
+    sfx.shoot(); return true;
+  } else if(h.cls==="cleric"){
+    h.abilityCd=12;
+    for(const p of party)healTarget(h,p,35+h.level*6);
+    addFloater(h.x,h.y-36,"HEAL BURST!","#7dff9a",18); return true;
+  }
+}
+// ================= MOVEMENT & AI =================
+function moveAlongPath(e,dt){
+  if(!e.path||!e.path.length){e.path=null;return;}
+  const wp=e.path[0];
+  const d=dist(e.x,e.y,wp.x,wp.y);
+  const step=e.speed*dt;
+  const px=e.x, py=e.y;
+  if(d<=step+2){ e.x=wp.x;e.y=wp.y;e.path.shift(); if(!e.path.length)e.path=null; }
+  else { e.x+=(wp.x-e.x)/d*step; e.y+=(wp.y-e.y)/d*step; }
+  if(dung.tileAt(e.x,e.y)===0){ e.x=px; e.y=py; e.path=null; } // shouldn't happen; bail safely
+}
+function orderMove(e,tx,ty){
+  const p=findPath(e.x,e.y,tx,ty);
+  if(p){e.path=p;e.moveT=null;e.atkTarget=null;}
+}
+function basicAttack(att,dst){
+  const st=att.kind==="hero"?heroStats(att):{atk:att.dmg};
+  if(att.kind==="hero"&&CLASSES[att.cls].range>120){
+    // ranged: fire projectile
+    const a=Math.atan2(dst.y-att.y,dst.x-att.x);
+    projectiles.push({x:att.x,y:att.y,vx:Math.cos(a)*420,vy:Math.sin(a)*420,r:6,
+      dmg:st.atk,friendly:true,aoe:0,color:att.cls==="mage"?"#c86bff":"#ffe9a8",from:att,kind:"bolt"});
+    sfx.shoot();
+  } else {
+    dealDamage(att,dst,st.atk*rand(0.9,1.1)); sfx.swing();
+  }
+  att.atkT=att.atkCd;
+}
+// --- NPC companion AI ---
+function npcAI(h,dt){
+  h.aiT-=dt; if(h.aiT>0)return; h.aiT=0.25;
+  if(h.downed)return;
+  const st=heroStats(h);
+  // find nearest live monster
+  let nm=null,nd=1e9;
+  for(const m of monsters){ const d=dist(h.x,h.y,m.x,m.y); if(d<nd){nd=d;nm=m;} }
+  if(h.cls==="cleric"){
+    // heal lowest ally
+    let low=null,lr=1;
+    for(const p of party){ if(p.downed||p===h)continue; const s2=heroStats(p); const r=p.hp/s2.maxhp; if(r<lr){lr=r;low=p;} }
+    const meR=h.hp/heroStats(h).maxhp;
+    if(low&&lr<0.7&&nd<9999){ // heal has range
+      if(dist(h.x,h.y,low.x,low.y)<320){ healTarget(h,low,18+h.level*3); h.atkT=1.2; }
+      else orderMove(h,low.x,low.y);
+      return;
+    }
+    if(meR<0.5){ healTarget(h,h,18+h.level*3); h.atkT=1.2; return; }
+    // revive nearest downed ally
+    const down=party.find(p=>p.downed);
+    if(down){ h.reviveT=down; orderMove(h,down.x,down.y); return; }
+    if(nm&&nd<340){ // plink at enemies when nothing to heal
+      if(nd<=h.range){ if(h.atkT<=0)basicAttack(h,nm); } else orderMove(h,nm.x,nm.y);
+      return;
+    }
+    followAnchor(h); return;
+  }
+  if(h.cls==="mage"){
+    if(nm){
+      // fireball the biggest clump every so often
+      if(h.abilityCd<=0&&monsters.length>=2){
+        let bx=nm.x,by=nm.y,bc=0;
+        for(const m of monsters){ let c=0; for(const m2 of monsters)if(dist(m.x,m.y,m2.x,m2.y)<110)c++; if(c>bc){bc=c;bx=m.x;by=m.y;} }
+        if(bc>=2&&dist(h.x,h.y,bx,by)<560){ useAbility(h,bx,by); return; }
+      }
+      if(nd>h.range*0.8)orderMove(h,nm.x,nm.y);
+      else if(nd<h.range*0.4)orderMove(h,h.x+(h.x-nm.x),h.y+(h.y-nm.y)); // kite
+      else { h.path=null; if(h.atkT<=0)basicAttack(h,nm); }
+      return;
+    }
+    followAnchor(h); return;
+  }
+  // warrior NPC: engage nearest, bodyguard the squishies
+  if(nm){
+    const mr=CLASSES.warrior.range;
+    if(nd>mr){ orderMove(h,nm.x,nm.y); }
+    else { h.path=null; if(h.atkT<=0)basicAttack(h,nm); }
+    if(hpFrac(h)<0.45&&h.abilityCd<=0)useAbility(h);
+    return;
+  }
+  followAnchor(h);
+}
+function hpFrac(h){ const s=heroStats(h); return h.hp/s.maxhp; }
+function followAnchor(h){
+  const a=h.anchor||h;
+  const d=dist(h.x,h.y,a.x,a.y);
+  if(d>130&&(!h.path||!h.path.length))orderMove(h,a.x+rand(-60,60),a.y+rand(-60,60));
+}
+// --- monster AI ---
+function monsterAI(m,dt){
+  if(!m.target||m.target.downed)retarget(m);
+  const t=m.target; if(!t)return;
+  const d=dist(m.x,m.y,t.x,t.y);
+  if(m.behavior==="chaser"||m.behavior==="boss"){
+    if(d>m.range*0.8){ const p=findPath(m.x,m.y,t.x,t.y); if(p&&p.length>3){m.path=p.slice(0,3);} else m.path=null;
+      if(m.path)moveAlongPath(m,dt); else { const a=Math.atan2(t.y-m.y,t.x-m.x); tryStep(m,a,dt); } }
+    else { m.path=null; if(m.atkT<=0){ dealDamage(m,t,m.dmg); m.atkT=m.atkCd; } }
+  } else if(m.behavior==="shooter"){
+    if(d<m.range*0.6){ const a=Math.atan2(m.y-t.y,m.x-t.x); tryStep(m,a,dt); }
+    else if(d>m.range){ const p=findPath(m.x,m.y,t.x,t.y); m.path=p?p.slice(0,2):null; if(m.path)moveAlongPath(m,dt); }
+    else m.path=null;
+    if(d<m.range&&m.atkT<=0){
+      const a=Math.atan2(t.y-m.y,t.x-m.x);
+      projectiles.push({x:m.x,y:m.y,vx:Math.cos(a)*300,vy:Math.sin(a)*300,r:6,dmg:m.dmg,friendly:false,color:"#e8e0c0",from:m,kind:"bone"});
+      m.atkT=m.atkCd; sfx.shoot();
+    }
+  }
+  if(m.behavior==="boss")bossAI(m,dt,d);
+}
+function tryStep(m,a,dt){
+  const nx=m.x+Math.cos(a)*m.speed*dt, ny=m.y+Math.sin(a)*m.speed*dt;
+  if(dung.tileAt(nx,m.y)!==0)m.x=nx;
+  if(dung.tileAt(m.x,ny)!==0)m.y=ny;
+}
+function bossAI(m,dt,d){
+  m.slamT-=dt; m.summonT-=dt;
+  if(m.telegraph){
+    m.telegraph.t-=dt;
+    if(m.telegraph.t<=0){
+      const {x,y,r}=m.telegraph;
+      burst(x,y,20,"#ff5e78"); sfx.boom();
+      for(const h of party)if(!h.downed&&dist(h.x,h.y,x,y)<r)dealDamage(m,h,m.dmg*1.6);
+      m.telegraph=null;
+    }
+    return;
+  }
+  if(m.slamT<=0&&d<400){
+    const t=m.target;
+    m.telegraph={x:t.x,y:t.y,r:130,t:1.2};
+    addFloater(t.x,t.y-40,"INCOMING!","#ff5e78",18);
+    m.slamT=rand(9,13); sfx.roar();
+  }
+  if(m.summonT<=0&&monsters.length<7){
+    for(let i=0;i<2;i++)spawnMonster("crypt_bat",clamp(Math.floor(m.x/TILE)+randi(-3,3),1,dung.gw-2),clamp(Math.floor(m.y/TILE)+randi(-3,3),1,dung.gh-2));
+    addFloater(m.x,m.y-50,"Minions, rise!","#c86bff",18);
+    m.summonT=rand(16,22);
+  }
+}
+// --- traps ---
+function updateTraps(dt){
+  for(const tr of dung.traps){
+    const wx=dung.px(tr.tx), wy=dung.py(tr.ty);
+    if(tr.state===0){
+      tr.t-=dt;
+      let victim=null;
+      for(const h of party)if(!h.downed&&dist(h.x,h.y,wx,wy)<34){victim=h;break;}
+      if(victim&&tr.t<=0){tr.state=1;tr.t=0.8;}
+      if(tr.t<-4)tr.t=rand(2,5);
+    } else if(tr.state===1){
+      tr.t-=dt; if(tr.t<=0){tr.state=2;tr.t=0.25; sfx.hit();
+        for(const h of party)if(!h.downed&&dist(h.x,h.y,wx,wy)<40)dealDamage({dmg:TRAPS.spikes.dmg,threatMul:0},h,TRAPS.spikes.dmg);
+        burst(wx,wy,8,"#9aa0b0"); }
+    } else { tr.t-=dt; if(tr.t<=0){tr.state=0;tr.t=rand(2,5);} }
+  }
+}
+// ================= INPUT =================
+let abilityTargeting=false;
+const abilityBtn={x:0,y:0,r:44};
+function onTap(px,py){
+  sfx.unlock();
+  if(state==="title"){ state="pick"; sfx.click(); return; }
+  if(state==="win"||state==="lose"){ startRun(lastClass); return; }
+  if(state!=="play")return;
+  const me=party.find(h=>h.isPlayer);
+  if(!me||me.downed)return;
+  // ability button?
+  const bx=W-70,by=H-90;
+  if(dist(px,py,bx,by)<56){
+    if(me.cls==="mage"){ abilityTargeting=true; addFloater(me.x,me.y-40,"Tap a spot!","#ff9f2e",16); }
+    else useAbility(me);
+    return;
+  }
+  // world coords
+  const wx=px+cam.x, wy=py+cam.y;
+  if(abilityTargeting&&me.cls==="mage"){ abilityTargeting=false; useAbility(me,wx,wy); return; }
+  // tap a monster? -> attack it
+  let bestM=null,bd=52;
+  for(const m of monsters){ const d=dist(wx,wy,m.x,m.y); if(d<bd+m.r){bd=d;bestM=m;} }
+  if(bestM){ me.atkTarget=bestM; me.path=null; me.moveT=null; return; }
+  // tap an ally? -> cleric heals, others walk to them
+  let bestA=null; bd=52;
+  for(const h of party){ if(h===me||h.downed)continue; const d=dist(wx,wy,h.x,h.y); if(d<bd){bd=d;bestA=h;} }
+  if(bestA){
+    if(me.cls==="cleric"){ // walk into range then heal
+      me.healTarget=bestA; me.path=null;
+      if(dist(me.x,me.y,bestA.x,bestA.y)>300)orderMove(me,bestA.x,bestA.y);
+      else { healTarget(me,bestA,22+me.level*4); me.atkT=1.0; me.healTarget=null; }
+    } else orderMove(me,bestA.x,bestA.y);
+    return;
+  }
+  // tap a downed ally -> go revive
+  for(const h of party){ if(!h.downed)continue; if(dist(wx,wy,h.x,h.y)<56){ me.reviveT=h; orderMove(me,h.x,h.y); return; } }
+  // otherwise walk there
+  abilityTargeting=false; me.reviveT=null; me.healTarget=null;
+  orderMove(me,wx,wy);
+}
+canvas.addEventListener("pointerdown",e=>{ e.preventDefault(); onTap(e.clientX,e.clientY); });
+// ================= UPDATE =================
+let lastClass="warrior";
+function update(dt){
+  if(state!=="play")return;
+  elapsed+=dt;
+  updateFog(dt); updateTraps(dt);
+  const me=party.find(h=>h.isPlayer);
+  // boss trigger
+  if(!bossSpawned){
+    const br=dung.rooms[3];
+    for(const h of party){
+      const tx=Math.floor(h.x/TILE),ty=Math.floor(h.y/TILE);
+      if(tx>=br.x&&tx<br.x+br.w&&ty>=br.y&&ty<br.y+br.h){ bossSpawned=true; spawnBoss(); break; }
+    }
+  }
+  for(const h of party){
+    if(h.downed)continue;
+    h.atkT-=dt; h.abilityCd-=dt; h.shieldT-=dt; h.wob+=dt*6;
+    if(h.isPlayer)playerCombat(h,dt); else npcAI(h,dt);
+    moveAlongPath(h,dt);
+    // revive channel
+    if(h.reviveT){
+      const d=h.reviveT;
+      if(d.downed&&dist(h.x,h.y,d.x,d.y)<56){
+        h.path=null; d.reviveT=(d.reviveT||0)+dt;
+        if(Math.floor(d.reviveT*4)!==Math.floor((d.reviveT-dt)*4))burst(d.x,d.y-20,3,"#7dff9a");
+        if(d.reviveT>=2){ d.downed=false; const s=heroStats(d); d.hp=Math.round(s.maxhp*0.5); d.reviveT=0; h.reviveT=null;
+          addFloater(d.x,d.y-36,"REVIVED!","#7dff9a",18); sfx.level(); }
+      } else if(!d.downed){ h.reviveT=null; }
+    }
+    // cleric walk-to-heal
+    if(h.healTarget){
+      const t=h.healTarget;
+      if(t.downed||t.hp>=heroStats(t).maxhp){h.healTarget=null;}
+      else if(dist(h.x,h.y,t.x,t.y)<300){ h.path=null; if(h.atkT<=0){healTarget(h,t,22+h.level*4);h.atkT=1.0;h.healTarget=null;} }
+    }
+    // loot pickup
+    for(let i=loots.length-1;i>=0;i--){ const l=loots[i];
+      if(dist(h.x,h.y,l.x,l.y)<34){ pickupLoot(h,l); loots.splice(i,1); } }
+  }
+  for(const m of monsters){ m.atkT-=dt; m.hitT-=dt; m.wob+=dt*5; if(!m.target||m.target.downed)retarget(m); monsterAI(m,dt); moveAlongPath(m,dt); }
+  // projectiles
+  for(let i=projectiles.length-1;i>=0;i--){ const p=projectiles[i];
+    p.x+=p.vx*dt; p.y+=p.vy*dt; p.life=(p.life||3)-dt;
+    let hit=false;
+    if(p.kind==="fireball"&&dist(p.x,p.y,p.tx,p.ty)<24){ hit=true; } // reached target -> boom
+    if(dung.tileAt(p.x,p.y)===0)hit=true;
+    if(p.friendly){
+      for(const m of monsters)if(dist(p.x,p.y,m.x,m.y)<m.r+p.r){ hit=true; break; }
+    } else {
+      for(const h of party)if(!h.downed&&dist(p.x,p.y,h.x,h.y)<h.r+p.r){ hit=true; break; }
+    }
+    if(hit||p.life<=0){
+      if(p.kind==="fireball"){
+        burst(p.x,p.y,22,"#ff9f2e"); sfx.boom();
+        for(const m of [...monsters])if(dist(p.x,p.y,m.x,m.y)<p.aoe)dealDamage(p.from,m,p.dmg);
+      } else if(p.friendly){
+        for(const m of [...monsters])if(dist(p.x,p.y,m.x,m.y)<m.r+p.r+4){ dealDamage(p.from,m,p.dmg); break; }
+      } else {
+        for(const h of party)if(!h.downed&&dist(p.x,p.y,h.x,h.y)<h.r+p.r+4){ dealDamage(p.from,h,p.dmg); break; }
+      }
+      projectiles.splice(i,1);
+    }
+  }
+  for(const f of floaters){f.t+=dt;f.y-=30*dt;}
+  floaters=floaters.filter(f=>f.t<f.life);
+  for(const p of particles){p.t+=dt;p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=500*dt;}
+  particles=particles.filter(p=>p.t<p.life);
+  // camera follows player
+  if(me){ cam.x=clamp(me.x-W/2,0,Math.max(0,dung.gw*TILE-W)); cam.y=clamp(me.y-H/2,0,Math.max(0,dung.gh*TILE-H)); }
+}
+function playerCombat(me,dt){
+  const t=me.atkTarget;
+  if(t&&(t.hp<=0||!monsters.includes(t))){me.atkTarget=null;return;}
+  if(!t)return;
+  const range=CLASSES[me.cls].range;
+  const d=dist(me.x,me.y,t.x,t.y);
+  me.repathT=(me.repathT||0)-dt;
+  if(d>range*0.9){
+    if(me.repathT<=0){orderMove(me,t.x,t.y);me.repathT=0.5;}
+  } else { me.path=null; if(me.atkT<=0)basicAttack(me,t); }
+}
+// ================= DRAW =================
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  if(state==="title"){ drawTitle(); return; }
+  if(state==="pick"){ drawPick(); return; }
+  drawDungeon(); drawTraps(); drawLoots(); drawTelegraphs();
+  for(const m of monsters)drawMonster(m);
+  for(const h of party)drawHero(h);
+  drawProjectiles(); drawParticles(); drawFloaters();
+  drawFogOverlay(); drawHUD(); drawMinimap();
+  if(state==="win")drawEnd(true);
+  if(state==="lose")drawEnd(false);
+}
+function tileVisible(tx,ty){ return dung.fog[ty*dung.gw+tx]===2; }
+function drawDungeon(){
+  const {gw,gh,tiles,fog}=dung;
+  const x0=Math.max(0,Math.floor(cam.x/TILE)-1), x1=Math.min(gw-1,Math.ceil((cam.x+W)/TILE)+1);
+  const y0=Math.max(0,Math.floor(cam.y/TILE)-1), y1=Math.min(gh-1,Math.ceil((cam.y+H)/TILE)+1);
+  for(let ty=y0;ty<=y1;ty++)for(let tx=x0;tx<=x1;tx++){
+    const i=ty*gw+tx, sx=tx*TILE-cam.x, sy=ty*TILE-cam.y;
+    if(!tiles[i]){
+      // wall: only draw if adjacent to floor
+      let near=false;
+      for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]])if(tiles[ty*gw+tx+dy*gw+dx]){near=true;break;}
+      if(near){ ctx.fillStyle="#241a33"; ctx.fillRect(sx,sy,TILE,TILE);
+        ctx.fillStyle="#312342"; ctx.fillRect(sx,sy,TILE,6); }
+      continue;
+    }
+    const seen=fog[i];
+    ctx.fillStyle=seen===2?"#3d3050":seen===1?"#1c1526":"#0b0714";
+    ctx.fillRect(sx,sy,TILE,TILE);
+    if(seen===2){ ctx.strokeStyle="rgba(0,0,0,0.25)"; ctx.lineWidth=1; ctx.strokeRect(sx+0.5,sy+0.5,TILE-1,TILE-1);
+      if(((tx*7+ty*13)%11)===0){ ctx.fillStyle="rgba(0,0,0,0.2)"; ctx.fillRect(sx+10,sy+30,8,5); } }
+  }
+}
+function drawFogOverlay(){
+  const {gw,gh,fog}=dung;
+  const x0=Math.max(0,Math.floor(cam.x/TILE)-1), x1=Math.min(gw-1,Math.ceil((cam.x+W)/TILE)+1);
+  const y0=Math.max(0,Math.floor(cam.y/TILE)-1), y1=Math.min(gh-1,Math.ceil((cam.y+H)/TILE)+1);
+  for(let ty=y0;ty<=y1;ty++)for(let tx=x0;tx<=x1;tx++){
+    const s=fog[ty*gw+tx]; if(s===2)continue;
+    ctx.fillStyle=s===1?"rgba(4,2,8,0.55)":"rgba(4,2,8,1)";
+    ctx.fillRect(tx*TILE-cam.x,ty*TILE-cam.y,TILE,TILE);
+  }
+}
+function drawTraps(){
+  for(const tr of dung.traps){
+    if(!tileVisible(tr.tx,tr.ty))continue;
+    const x=dung.px(tr.tx)-cam.x, y=dung.py(tr.ty)-cam.y;
+    ctx.fillStyle="#4a3b28"; ctx.fillRect(x-20,y-20,40,40);
+    if(tr.state===1){ ctx.fillStyle="rgba(255,80,80,0.5)"; ctx.fillRect(x-20,y-20,40,40); }
+    ctx.fillStyle=tr.state===2?"#d8d8e8":"#7a7a88";
+    for(let i=-1;i<=1;i++)for(let j=-1;j<=1;j++){
+      const h=tr.state===2?16:7;
+      ctx.beginPath(); ctx.moveTo(x+i*12-4,y+j*12+h/2); ctx.lineTo(x+i*12+4,y+j*12+h/2); ctx.lineTo(x+i*12,y+j*12-h/2);
+      ctx.closePath(); ctx.fill();
+    }
+  }
+}
+function drawLoots(){
+  for(const l of loots){
+    if(!tileVisible(Math.floor(l.x/TILE),Math.floor(l.y/TILE)))continue;
+    const x=l.x-cam.x, y=l.y-cam.y+Math.sin(elapsed*4+l.x)*3;
+    ctx.fillStyle=l.rar.c;
+    ctx.save(); ctx.translate(x,y); ctx.rotate(Math.PI/4); ctx.fillRect(-8,-8,16,16); ctx.restore();
+    ctx.fillStyle="#fff"; ctx.font="10px sans-serif"; ctx.textAlign="center";
+    ctx.fillText(l.stat.toUpperCase()+"+"+l.val,x,y-16);
+  }
+}
+function drawTelegraphs(){
+  for(const m of monsters){
+    if(m.telegraph&&tileVisible(Math.floor(m.x/TILE),Math.floor(m.y/TILE))){
+      const t=m.telegraph;
+      ctx.fillStyle="rgba(255,60,80,"+(0.25+0.2*Math.sin(elapsed*10)).toFixed(2)+")";
+      ctx.beginPath(); ctx.arc(t.x-cam.x,t.y-cam.y,t.r,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle="#ff3c50"; ctx.lineWidth=3;
+      ctx.beginPath(); ctx.arc(t.x-cam.x,t.y-cam.y,t.r,0,Math.PI*2); ctx.stroke();
+    }
+  }
+}
+function drawHero(h){
+  if(!tileVisible(Math.floor(h.x/TILE),Math.floor(h.y/TILE)))return;
+  const x=h.x-cam.x, y=h.y-cam.y;
+  const bob=h.downed?0:Math.sin(h.wob)*2;
+  // shadow
+  ctx.fillStyle="rgba(0,0,0,0.35)"; ctx.beginPath(); ctx.ellipse(x,y+14,14,5,0,0,Math.PI*2); ctx.fill();
+  ctx.save(); ctx.translate(x,y+bob*0.3);
+  if(h.downed)ctx.globalAlpha=0.55;
+  // body
+  ctx.fillStyle=h.color; ctx.beginPath(); ctx.arc(0,0,h.r,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle="rgba(255,255,255,0.25)"; ctx.beginPath(); ctx.arc(-5,-6,7,0,Math.PI*2); ctx.fill();
+  // class icon
+  ctx.fillStyle="#fff";
+  if(h.cls==="warrior"){ ctx.fillRect(-8,-3,16,6); ctx.fillRect(-3,-8,6,16); } // shield cross... sword-ish
+  else if(h.cls==="mage"){ ctx.beginPath(); ctx.moveTo(0,-14); ctx.lineTo(-9,4); ctx.lineTo(9,4); ctx.closePath(); ctx.fill(); }
+  else { ctx.beginPath(); ctx.arc(0,-2,6,0,Math.PI*2); ctx.fill(); ctx.fillRect(-2,2,4,10); } // cleric orb+robe
+  // eyes
+  ctx.fillStyle="#1a1a22";
+  ctx.beginPath(); ctx.arc(-6,-2,2.4,0,Math.PI*2); ctx.arc(6,-2,2.4,0,Math.PI*2); ctx.fill();
+  if(h.shieldT>0){ ctx.strokeStyle="rgba(120,180,255,0.9)"; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.arc(0,0,h.r+6,0,Math.PI*2); ctx.stroke(); }
+  ctx.restore();
+  // hp bar + name
+  const st=heroStats(h);
+  ctx.fillStyle="rgba(0,0,0,0.6)"; ctx.fillRect(x-22,y-34,44,7);
+  ctx.fillStyle=h.downed?"#666":(h.hp/st.maxhp>0.35?"#6bff8f":"#ff5e78");
+  ctx.fillRect(x-21,y-33,42*clamp(h.hp/st.maxhp,0,1),5);
+  ctx.fillStyle=h.isPlayer?"#ffe9a8":"#cfc3e8"; ctx.font="11px sans-serif"; ctx.textAlign="center";
+  ctx.fillText(h.downed?"DOWN!":(h.name+" Lv"+h.level),x,y-38);
+  if(h.downed){ ctx.fillStyle="#ff5e78"; ctx.font="bold 13px sans-serif"; ctx.fillText("TAP TO REVIVE",x,y+30); }
+}
+function drawMonster(m){
+  if(!tileVisible(Math.floor(m.x/TILE),Math.floor(m.y/TILE)))return;
+  const x=m.x-cam.x, y=m.y-cam.y;
+  const wob=Math.sin(m.wob)*3;
+  ctx.fillStyle="rgba(0,0,0,0.35)"; ctx.beginPath(); ctx.ellipse(x,y+m.r*0.7,m.r,m.r*0.35,0,0,Math.PI*2); ctx.fill();
+  const flash=m.hitT>0;
+  ctx.fillStyle=flash?"#ffffff":m.color;
+  ctx.beginPath(); ctx.arc(x,y+wob*0.3,m.r,0,Math.PI*2); ctx.fill();
+  // eyes
+  ctx.fillStyle=flash?"#333":"#ff3c50";
+  ctx.beginPath(); ctx.arc(x-6,y-3+wob*0.3,3,0,Math.PI*2); ctx.arc(x+6,y-3+wob*0.3,3,0,Math.PI*2); ctx.fill();
+  if(m.behavior==="shooter"){ // little skull bow
+    ctx.strokeStyle="#e8e0c0"; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.arc(x,y+wob*0.3,m.r+6,-0.6,0.6); ctx.stroke();
+  }
+  if(m.kind==="boss"){ // crown
+    ctx.fillStyle="#ffd76b";
+    ctx.beginPath(); ctx.moveTo(x-16,y-m.r-4); ctx.lineTo(x-16,y-m.r-16); ctx.lineTo(x-8,y-m.r-8);
+    ctx.lineTo(x,y-m.r-18); ctx.lineTo(x+8,y-m.r-8); ctx.lineTo(x+16,y-m.r-16); ctx.lineTo(x+16,y-m.r-4);
+    ctx.closePath(); ctx.fill();
+  }
+  // hp bar
+  if(m.hp<m.maxhp){
+    const w=m.kind==="boss"?90:36;
+    ctx.fillStyle="rgba(0,0,0,0.6)"; ctx.fillRect(x-w/2,y-m.r-16,w,6);
+    ctx.fillStyle="#ff5e78"; ctx.fillRect(x-w/2+1,y-m.r-15,(w-2)*clamp(m.hp/m.maxhp,0,1),4);
+  }
+}
+function drawProjectiles(){
+  for(const p of projectiles){
+    const x=p.x-cam.x,y=p.y-cam.y;
+    ctx.fillStyle=p.color; ctx.beginPath(); ctx.arc(x,y,p.r,0,Math.PI*2); ctx.fill();
+    if(p.kind==="fireball"){ ctx.fillStyle="rgba(255,160,60,0.5)"; ctx.beginPath(); ctx.arc(x,y,p.r+5,0,Math.PI*2); ctx.fill(); }
+  }
+}
+function drawParticles(){
+  for(const p of particles){
+    ctx.globalAlpha=clamp(1-p.t/p.life,0,1); ctx.fillStyle=p.color;
+    ctx.fillRect(p.x-cam.x-2,p.y-cam.y-2,4,4);
+  }
+  ctx.globalAlpha=1;
+}
+function drawFloaters(){
+  ctx.textAlign="center";
+  for(const f of floaters){
+    ctx.globalAlpha=clamp(1-f.t/f.life,0,1);
+    ctx.font="bold "+f.size+"px sans-serif";
+    ctx.fillStyle=f.color; ctx.fillText(f.text,f.x-cam.x,f.y-cam.y);
+  }
+  ctx.globalAlpha=1;
+}
+function drawHUD(){
+  // ‹ Arcade
+  ctx.fillStyle="rgba(20,10,5,0.7)";
+  ctx.beginPath(); ctx.roundRect(10,10,110,40,12); ctx.fill();
+  ctx.fillStyle="#ffb347"; ctx.font="bold 17px sans-serif"; ctx.textAlign="center";
+  ctx.fillText("‹ Arcade",65,36);
+  canvas._backBtn={x:10,y:10,w:110,h:40};
+  // party portraits
+  party.forEach((h,i)=>{
+    const x=14,y=64+i*54;
+    const st=heroStats(h);
+    ctx.fillStyle="rgba(10,6,16,0.72)"; ctx.beginPath(); ctx.roundRect(x,y,150,46,10); ctx.fill();
+    ctx.fillStyle=h.color; ctx.beginPath(); ctx.arc(x+22,y+23,13,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle="#fff"; ctx.font="bold 11px sans-serif"; ctx.textAlign="left";
+    ctx.fillText(h.name+"  Lv"+h.level,x+42,y+20);
+    ctx.fillStyle="rgba(0,0,0,0.6)"; ctx.fillRect(x+42,y+26,96,8);
+    ctx.fillStyle=h.downed?"#666":(h.hp/st.maxhp>0.35?"#6bff8f":"#ff5e78");
+    ctx.fillRect(x+43,y+27,94*clamp(h.hp/st.maxhp,0,1),6);
+  });
+  // timer
+  const mm=String(Math.floor(elapsed/60)).padStart(2,"0"), ss=String(Math.floor(elapsed%60)).padStart(2,"0");
+  ctx.fillStyle="#ffe9a8"; ctx.font="bold 20px sans-serif"; ctx.textAlign="center";
+  ctx.fillText(mm+":"+ss,W/2,32);
+  // ability button
+  const me=party.find(h=>h.isPlayer);
+  if(me&&!me.downed){
+    const bx=W-70,by=H-90;
+    ctx.fillStyle=me.abilityCd>0?"rgba(80,80,100,0.6)":"rgba(255,180,70,0.85)";
+    ctx.beginPath(); ctx.arc(bx,by,44,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle="#fff"; ctx.lineWidth=3; ctx.beginPath(); ctx.arc(bx,by,44,0,Math.PI*2); ctx.stroke();
+    ctx.fillStyle="#1a1a22"; ctx.font="bold 13px sans-serif"; ctx.textAlign="center";
+    const label=me.cls==="warrior"?"SHIELD":me.cls==="mage"?"FIRE":"HEAL";
+    ctx.fillText(label,bx,by-2);
+    if(me.abilityCd>0){ ctx.fillStyle="#fff"; ctx.font="bold 18px sans-serif"; ctx.fillText(Math.ceil(me.abilityCd),bx,by+18); }
+    else if(me.cls==="mage"&&abilityTargeting){ ctx.fillStyle="#ff9f2e"; ctx.font="bold 12px sans-serif"; ctx.fillText("tap a spot",bx,by+18); }
+    else { ctx.fillStyle="#1a1a22"; ctx.font="11px sans-serif"; ctx.fillText(CLASSES[me.cls].abilityDesc,bx,by+18); }
+  }
+  // boss bar
+  if(bossRef&&bossRef.hp>0){
+    const w=Math.min(420,W-40);
+    ctx.fillStyle="rgba(10,6,16,0.8)"; ctx.beginPath(); ctx.roundRect(W/2-w/2,H-46,w,26,8); ctx.fill();
+    ctx.fillStyle="#ff5e78"; ctx.fillRect(W/2-w/2+3,H-43,(w-6)*clamp(bossRef.hp/bossRef.maxhp,0,1),20);
+    ctx.fillStyle="#fff"; ctx.font="bold 13px sans-serif"; ctx.textAlign="center";
+    ctx.fillText("THE CRYPT KEEPER",W/2,H-28);
+  }
+}
+function drawMinimap(){
+  const mw=132,mh=82, mx=W-mw-12, my=54;
+  const sx=mw/(dung.gw), sy=mh/(dung.gh);
+  ctx.fillStyle="rgba(6,4,10,0.85)"; ctx.beginPath(); ctx.roundRect(mx-4,my-4,mw+8,mh+8,8); ctx.fill();
+  for(let ty=0;ty<dung.gh;ty++)for(let tx=0;tx<dung.gw;tx++){
+    const f=dung.fog[ty*dung.gw+tx]; if(!f)continue;
+    ctx.fillStyle=f===2?"#6f5f8f":"#332a44";
+    ctx.fillRect(mx+tx*sx,my+ty*sy,Math.ceil(sx),Math.ceil(sy));
+  }
+  for(const m of monsters){ const t=Math.floor(m.x/TILE),t2=Math.floor(m.y/TILE);
+    if(dung.fog[t2*dung.gw+t]!==2)continue;
+    ctx.fillStyle=m.kind==="boss"?"#ff3c50":"#ff9f6b";
+    ctx.fillRect(mx+t*sx-1,my+t2*sy-1,3,3);
+  }
+  for(const h of party){ ctx.fillStyle=h.isPlayer?"#7dff9a":"#b8ffcf";
+    ctx.fillRect(mx+Math.floor(h.x/TILE)*sx-1,my+Math.floor(h.y/TILE)*sy-1,3,3); }
+}
+function panel(title,lines,accent){
+  const w=Math.min(W-60,440), h=140+lines.length*32;
+  const x=W/2-w/2, y=H/2-h/2;
+  ctx.fillStyle="rgba(14,8,22,0.92)"; ctx.beginPath(); ctx.roundRect(x,y,w,h,20); ctx.fill();
+  ctx.strokeStyle=accent; ctx.lineWidth=4; ctx.beginPath(); ctx.roundRect(x,y,w,h,20); ctx.stroke();
+  ctx.textAlign="center"; ctx.fillStyle=accent; ctx.font="900 38px sans-serif";
+  ctx.fillText(title,W/2,y+64);
+  ctx.fillStyle="#fff"; ctx.font="17px sans-serif";
+  lines.forEach((l,i)=>ctx.fillText(l,W/2,y+112+i*32));
+  ctx.fillStyle="#ffb347"; ctx.font="bold 16px sans-serif";
+  ctx.fillText("— tap to continue —",W/2,y+h-24);
+}
+function drawTitle(){
+  ctx.fillStyle="#0b0714"; ctx.fillRect(0,0,W,H);
+  // spooky backdrop
+  for(let i=0;i<60;i++){ ctx.fillStyle="rgba(200,160,255,"+(0.1+((i*37)%10)/60).toFixed(2)+")";
+    ctx.fillRect((i*173)%W,(i*311)%H,3,3); }
+  ctx.textAlign="center"; ctx.fillStyle="#c86bff"; ctx.font="900 "+Math.min(64,W/8)+"px sans-serif";
+  ctx.fillText("DUNGEON",W/2,H/2-90);
+  ctx.fillText("DELvers".toUpperCase(),W/2,H/2-30);
+  ctx.fillStyle="#cfc3e8"; ctx.font="18px sans-serif";
+  ctx.fillText("A tiny co-op dungeon crawler",W/2,H/2+14);
+  ctx.fillText("Tap to move • Tap monsters to attack",W/2,H/2+44);
+  ctx.fillText("Prototype — tap anywhere to begin",W/2,H/2+110);
+  ctx.fillStyle="#ffb347"; ctx.font="bold 17px sans-serif";
+}
+function drawPick(){
+  ctx.fillStyle="#0b0714"; ctx.fillRect(0,0,W,H);
+  ctx.textAlign="center"; ctx.fillStyle="#c86bff"; ctx.font="900 40px sans-serif";
+  ctx.fillText("CHOOSE YOUR HERO",W/2,90);
+  ctx.fillStyle="#cfc3e8"; ctx.font="16px sans-serif";
+  ctx.fillText("The others join you as companions",W/2,120);
+  const cw=Math.min(220,(W-60)/3-16);
+  ["warrior","mage","cleric"].forEach((k,i)=>{
+    const c=CLASSES[k];
+    const x=W/2-((cw+16)*3)/2+i*(cw+16)+8, y=160, h=300;
+    ctx.fillStyle="rgba(20,12,32,0.95)"; ctx.beginPath(); ctx.roundRect(x,y,cw,h,16); ctx.fill();
+    ctx.strokeStyle=c.color; ctx.lineWidth=4; ctx.beginPath(); ctx.roundRect(x,y,cw,h,16); ctx.stroke();
+    ctx.fillStyle=c.color; ctx.beginPath(); ctx.arc(x+cw/2,y+70,34,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle="#fff"; ctx.font="bold 20px sans-serif"; ctx.textAlign="center";
+    ctx.fillText(c.name,x+cw/2,y+130);
+    ctx.font="14px sans-serif"; ctx.fillStyle="#cfc3e8";
+    wrapText(c.desc,x+16,y+160,cw-32,20);
+    ctx.fillStyle="#ffe9a8"; ctx.font="bold 13px sans-serif";
+    ctx.fillText("❤"+c.hp+"  ⚔"+c.atk+"  🛡"+c.def,x+cw/2,y+250);
+    ctx.fillStyle="#ffb347"; ctx.font="bold 13px sans-serif";
+    ctx.fillText(c.ability+": "+c.abilityDesc,x+cw/2,y+274);
+    canvas._pick=i;
+  });
+  canvas._pickRects=["warrior","mage","cleric"].map((k,i)=>{
+    const x=W/2-((cw+16)*3)/2+i*(cw+16)+8; return {k,x,y:160,w:cw,h:300};
+  });
+}
+function wrapText(text,x,y,maxW,lh){
+  const words=text.split(" "); let line="",yy=y;
+  ctx.textAlign="left";
+  for(const w of words){ const t=line?line+" "+w:w;
+    if(ctx.measureText(t).width>maxW&&line){ctx.fillText(line,x,yy);line=w;yy+=lh;}
+    else line=t; }
+  ctx.fillText(line,x,yy); ctx.textAlign="center";
+}
+function drawEnd(win){
+  panel(win?"VICTORY!":"PARTY WIPED",
+    win?["The Crypt Keeper is defeated!","Time: "+fmtTime(elapsed),"Monsters beaten: "+kills,
+         "Seed: "+seedShown,"Tap to delve a new dungeon"]
+        :["Everyone got bonked...","Monsters beaten: "+kills,"Tap to try a new dungeon"],
+    win?"#7dff9a":"#ff5e78");
+}
+function fmtTime(s){ return String(Math.floor(s/60)).padStart(2,"0")+":"+String(Math.floor(s%60)).padStart(2,"0"); }
+// back button + class pick taps
+const _onTap=onTap;
+onTap=function(px,py){
+  if(canvas._backBtn&&px>=canvas._backBtn.x&&px<=canvas._backBtn.x+canvas._backBtn.w&&
+     py>=canvas._backBtn.y&&py<=canvas._backBtn.y+canvas._backBtn.h&&state==="play"){
+    window.location.href="../"; return;
+  }
+  if(state==="pick"&&canvas._pickRects){
+    for(const r of canvas._pickRects)if(px>=r.x&&px<=r.x+r.w&&py>=r.y&&py<=r.y+r.h){ lastClass=r.k; startRun(r.k); return; }
+  }
+  _onTap(px,py);
+};
+// ================= MAIN LOOP =================
+let lastT=0;
+function frame(now){
+  const dt=Math.min(0.05,(now-lastT)/1000||0.016); lastT=now;
+  update(dt); draw();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
