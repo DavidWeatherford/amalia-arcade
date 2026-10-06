@@ -22,7 +22,7 @@ const ctx = canvas.getContext("2d");
 
 let W = 0, H = 0, DPR = 1;
 let CX = 0;                 // screen center x
-let HORIZON = 0;            // y of the far ridge the road disappears behind
+let HORIZON = 0;            // height of the sky band at the top
 let PLAYER_Y = 0;           // screen y of the van (chase-cam plane, t = 0)
 let LANE_PX = 58;           // lane width in px at the player plane
 let VAN_S = 0.5;            // van/car draw scale: ~0.84 lane widths
@@ -104,11 +104,11 @@ function saveBest() { try { localStorage.setItem(BEST_KEY, String(best)); } catc
 
 // ---------- flat road ----------
 // off = lateral offset from road center in lane units (lane i sits at i - (LANES-1)/2).
-// t = 1 at the far ridge, t = 0 at the van's plane. No perspective: constant width.
+// t = 1 at the top edge of the screen, t = 0 at the van's plane. No perspective: constant width.
 function proj(off, t) {
   return {
     x: CX + off * LANE_PX,
-    y: PLAYER_Y + (HORIZON - PLAYER_Y) * t,
+    y: PLAYER_Y * (1 - t),
     s: 1
   };
 }
@@ -339,16 +339,6 @@ function drawBackground() {
   const sand = ctx.createLinearGradient(0, HORIZON, 0, H);
   sand.addColorStop(0, "#d99a55"); sand.addColorStop(1, "#c07f3e");
   ctx.fillStyle = sand; ctx.fillRect(0, HORIZON, W, H - HORIZON);
-}
-
-function drawMountains() {
-  // far ridge the road disappears behind
-  ctx.fillStyle = "#8a7bb8";
-  ctx.beginPath(); ctx.moveTo(0, HORIZON);
-  for (let x = 0; x <= W; x += 24) {
-    ctx.lineTo(x, HORIZON - 14 - Math.abs(Math.sin(x * 0.013 + 2)) * 44 - Math.abs(Math.sin(x * 0.05)) * 10);
-  }
-  ctx.lineTo(W, HORIZON); ctx.closePath(); ctx.fill();
 }
 
 function drawRoadside() {
@@ -582,7 +572,6 @@ function draw() {
   drawBackground();
   drawRoad();
   drawRoadside();
-  drawMountains(); // ridge overlaps the road top — traffic emerges from behind it
 
   // traffic, far to near
   const sorted = obstacles.slice().sort((a, b2) => b2.t - a.t);
