@@ -249,6 +249,9 @@ function genDungeon(seed){
       if(walls.length){ const [tx,ty]=choice(walls); torches.push({tx,ty,phase:rand(0,6.28)}); }
     }
   }
+  // D: one treasure chest per dungeon, tucked in a combat room
+  const chr=choice([rooms[1],rooms[2]]);
+  const chest={tx:randi(chr.x+1,chr.x+chr.w-2), ty:randi(chr.y+1,chr.y+chr.h-2), opened:false, bounce:0};
   // traps in combat rooms
   const traps=[];
   for(const r of [rooms[1],rooms[2]]){
@@ -258,7 +261,7 @@ function genDungeon(seed){
       traps.push({tx,ty,kind:"spikes",t:rand(0,3),state:0,cd:0}); // state 0 idle,1 warning,2 striking
     }
   }
-  return {gw,gh,tiles,fog,explored:new Uint8Array(gw*gh),rooms,traps,decor,torches,seed,
+  return {gw,gh,tiles,fog,explored:new Uint8Array(gw*gh),rooms,traps,decor,torches,chest,seed,
     px:(tx)=>(tx+0.5)*TILE, py:(ty)=>(ty+0.5)*TILE,
     tileAt:(px,py)=>{ const tx=Math.floor(px/TILE),ty=Math.floor(py/TILE); return (tx<0||ty<0||tx>=gw||ty>=gh)?0:tiles[ty*gw+tx]; } };
 }
@@ -313,7 +316,7 @@ function makeHero(clsKey,isPlayer,idx){
     x:0,y:0, r:18, color:c.color, maxhp:c.hp, hp:c.hp, atk:c.atk, def:c.def,
     speed:c.speed, range:c.range, atkCd:c.atkCd, atkT:0, threatMul:c.threatMul,
     level:1, xp:0, xpNext:30, path:null, moveT:null, atkTarget:null,
-    downed:false, reviveT:0, reviveBy:null, abilityCd:0, shieldT:0, face:0,
+    downed:false, reviveT:0, reviveBy:null, abilityCd:0, shieldT:0, face:0, potions:0,
     aiT:rand(0,0.3), anchor:null, wob:rand(0,6), gearAtk:0, gearDef:0, gearHp:0 };
 }
 function heroStats(h){ return { atk:h.atk+h.gearAtk+(h.level-1)*2, def:h.def+h.gearDef+(h.level-1)*1,
@@ -424,6 +427,11 @@ function dealDamage(src,dst,amount){
       burst(dst.x,dst.y,14,"#c86bff");
       gainXP(dst.xp);
       maybeDropLoot(dst);
+      if(rng()<0.15){ // D: potion find — straight to inventory, no UI to learn
+        const cands=party.filter(h=>!h.downed&&h.potions<2);
+        if(cands.length){ const c=choice(cands); c.potions++;
+          addFloater(c.x,c.y-46,"+POTION","#ff6b7a",14); burst(c.x,c.y,6,"#ff6b7a"); }
+      }
       if(dst.split&&dst.type==="slime"&&monsters.length<10){
         for(const s of [-1,1]){
           spawnMonsterAt("mini_slime",dst.x+s*22,dst.y+rand(-8,8));
@@ -730,6 +738,16 @@ function onTap(px,py){
   let bestM=null,bd=52;
   for(const m of monsters){ const d=dist(wx,wy,m.x,m.y); if(d<bd+m.r){bd=d;bestM=m;} }
   if(bestM){ me.atkTarget=bestM; me.moveT=null; return; }
+  // tap the treasure chest? -> open it
+  const ch=dung.chest;
+  if(ch&&!ch.opened&&dist(wx,wy,ch.tx*TILE+TILE/2,ch.ty*TILE+TILE/2)<70){
+    ch.opened=true; ch.bounce=0.6;
+    const nl=2+((rng()*2)|0);
+    for(let i=0;i<nl;i++)spawnLootAt(ch.tx*TILE+TILE/2+rand(-30,30),ch.ty*TILE+TILE/2+rand(-10,20));
+    burst(ch.tx*TILE+TILE/2,ch.ty*TILE,18,"#ffd76b");
+    addFloater(ch.tx*TILE+TILE/2,ch.ty*TILE-30,"TREASURE!","#ffd76b",20); sfx.level();
+    return;
+  }
   // tap an ally? -> cleric heals, others walk to them
   let bestA=null; bd=52;
   for(const h of party){ if(h===me||h.downed)continue; const d=dist(wx,wy,h.x,h.y); if(d<bd){bd=d;bestA=h;} }
@@ -783,6 +801,12 @@ function update(dt){
       const t=h.healTarget;
       if(t.downed||t.hp>=heroStats(t).maxhp){h.healTarget=null;}
       else if(dist(h.x,h.y,t.x,t.y)<300){ h.moveT=null; if(h.atkT<=0){healTarget(h,t,22+h.level*4);h.atkT=1.0;h.healTarget=null;} }
+    }
+    // D: auto-potion at low HP (fully automatic)
+    if(!h.downed&&h.potions>0&&h.hp>0){
+      const pst=heroStats(h);
+      if(h.hp<pst.maxhp*0.35){ h.potions--; healTarget(h,h,Math.round(pst.maxhp*0.5));
+        addFloater(h.x,h.y-40,"POTION!","#ff6b7a",16); }
     }
     // loot pickup
     for(let i=loots.length-1;i>=0;i--){ const l=loots[i];
@@ -858,7 +882,7 @@ function draw(){
   if(state==="pick"){ drawPick(); return; }
   ctx.save();
   if(shake>0.2)ctx.translate(rand(-1,1)*shake,rand(-1,1)*shake);
-  drawDungeon(); drawLighting(); drawTorches(); drawTraps(); drawLoots(); drawTelegraphs();
+  drawDungeon(); drawLighting(); drawTorches(); drawTraps(); drawLoots(); drawChest(); drawTelegraphs();
   for(const m of monsters)drawMonster(m);
   for(const h of party)drawHero(h);
   drawProjectiles(); drawParticles(); drawEffects(); drawFloaters(); drawIndicators();
@@ -976,6 +1000,23 @@ function drawTorches(){
       ctx.moveTo(x-s,y); ctx.lineTo(x+s,y); ctx.moveTo(x,y-s); ctx.lineTo(x,y+s);
       ctx.stroke();
     }
+  }
+}
+// D: treasure chest — tap to open, pops 2-3 loot
+function drawChest(){
+  const ch=dung.chest; if(!ch||!tileVisible(ch.tx,ch.ty))return;
+  let x=ch.tx*TILE+TILE/2-cam.x, y=ch.ty*TILE+TILE/2-cam.y;
+  ctx.fillStyle="rgba(0,0,0,0.35)"; ctx.beginPath(); ctx.ellipse(x,y+16,22,8,0,0,Math.PI*2); ctx.fill();
+  let hop=0;
+  if(ch.bounce>0){ ch.bounce-=1/60; hop=Math.sin(Math.max(0,ch.bounce)/0.6*Math.PI)*12; }
+  const bob=ch.opened?0:Math.abs(Math.sin(elapsed*3))*3;
+  if(!spr2("prop_chest",x,y+8-hop-bob,56,false)){
+    ctx.fillStyle="#8a5a2e"; ctx.fillRect(x-20,y-16,40,32);
+  }
+  if(!ch.opened){
+    const gl=0.5+0.3*Math.sin(elapsed*4);
+    ctx.fillStyle="rgba(255,220,120,"+gl.toFixed(2)+")";
+    ctx.beginPath(); ctx.arc(x,y-24,4,0,Math.PI*2); ctx.fill();
   }
 }
 function drawFogOverlay(){
