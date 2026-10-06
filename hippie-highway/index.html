@@ -22,7 +22,7 @@ const ctx = canvas.getContext("2d");
 
 let W = 0, H = 0, DPR = 1;
 let CX = 0;                 // screen center x
-let HORIZON = 0;            // y of the vanishing point
+let HORIZON = 0;            // y of the far ridge the road disappears behind
 let PLAYER_Y = 0;           // screen y of the van (chase-cam plane, t = 0)
 let LANE_PX = 58;           // lane width in px at the player plane
 let VAN_S = 0.5;            // van/car draw scale: ~0.84 lane widths
@@ -102,16 +102,14 @@ let best = 0;
 try { best = parseInt(localStorage.getItem(BEST_KEY) || "0", 10) || 0; } catch (e) {}
 function saveBest() { try { localStorage.setItem(BEST_KEY, String(best)); } catch (e) {} }
 
-// ---------- perspective ----------
+// ---------- flat road ----------
 // off = lateral offset from road center in lane units (lane i sits at i - (LANES-1)/2).
-// t = 1 at the horizon, t = 0 at the van's plane. zn flips it for scaling.
+// t = 1 at the far ridge, t = 0 at the van's plane. No perspective: constant width.
 function proj(off, t) {
-  const zn = Math.max(0.02, 1 - t);
-  const s = zn * zn;
   return {
-    x: CX + off * LANE_PX * s,
-    y: HORIZON + (PLAYER_Y - HORIZON) * s,
-    s
+    x: CX + off * LANE_PX,
+    y: PLAYER_Y + (HORIZON - PLAYER_Y) * t,
+    s: 1
   };
 }
 
@@ -253,32 +251,33 @@ function update(now) {
 
   if (state !== STATE.PLAYING) return;
   elapsed += dt;
-  rate = Math.min(0.5 + elapsed * 0.006, 1.1);   // gentle ~2-minute ramp
+  rate = Math.min(0.5 + elapsed * 0.006, 1.25);   // gentle ramp, a bit livelier late
 
   beatT -= dt;
   if (beatT <= 0) { sfx.musicBeat(); beatT = 0.19; }
 
   lanePos += (lane - lanePos) * Math.min(1, dt * 13);
 
-  // spawn waves — always leave the van a way through; alternate with last wave
+  // spawn waves — more cars the longer the run; always leave the van a way through
   spawnT -= dt;
   if (spawnT <= 0) {
     const free = [];
     for (let l = 0; l < LANES; l++) if (lastBlocked.indexOf(l) < 0) free.push(l);
     const all = []; for (let l = 0; l < LANES; l++) all.push(l);
-    const pool = free.length >= 5 ? free : all;
+    const pool = free.length >= 4 ? free : all;
     let k = 2;
-    const r = Math.random();
-    if (elapsed > 80 && r < 0.22) k = 4;
-    else if (elapsed > 40 && r < 0.45) k = 3;
-    k = Math.min(k, 4, pool.length);
+    if (elapsed > 105) k = 6;
+    else if (elapsed > 75) k = 5;
+    else if (elapsed > 45) k = 4;
+    else if (elapsed > 20) k = 3;
+    k = Math.min(k, 6, pool.length);
     const picks = [];
     for (let i = 0; i < k; i++) picks.push(pool.splice((Math.random() * pool.length) | 0, 1)[0]);
     picks.forEach((ln, i) => {
       obstacles.push({ lane: ln, t: 1.02 + i * 0.07, ci: (Math.random() * CAR_COLORS.length) | 0, passed: false });
     });
     lastBlocked = picks.slice();
-    spawnT = Math.max(0.55, 1.15 - elapsed * 0.006);
+    spawnT = Math.max(0.35, 1.0 - elapsed * 0.004); // waves come faster over time
   }
 
   for (let i = obstacles.length - 1; i >= 0; i--) {
@@ -336,17 +335,20 @@ function drawBackground() {
     ctx.ellipse(x + 32 * s, y + 6 * s, 28 * s, 11 * s, 0, 0, Math.PI * 2);
     ctx.fill();
   }
-  // mountains on the horizon
+  // desert floor
+  const sand = ctx.createLinearGradient(0, HORIZON, 0, H);
+  sand.addColorStop(0, "#d99a55"); sand.addColorStop(1, "#c07f3e");
+  ctx.fillStyle = sand; ctx.fillRect(0, HORIZON, W, H - HORIZON);
+}
+
+function drawMountains() {
+  // far ridge the road disappears behind
   ctx.fillStyle = "#8a7bb8";
   ctx.beginPath(); ctx.moveTo(0, HORIZON);
   for (let x = 0; x <= W; x += 24) {
     ctx.lineTo(x, HORIZON - 14 - Math.abs(Math.sin(x * 0.013 + 2)) * 44 - Math.abs(Math.sin(x * 0.05)) * 10);
   }
   ctx.lineTo(W, HORIZON); ctx.closePath(); ctx.fill();
-  // desert floor
-  const sand = ctx.createLinearGradient(0, HORIZON, 0, H);
-  sand.addColorStop(0, "#d99a55"); sand.addColorStop(1, "#c07f3e");
-  ctx.fillStyle = sand; ctx.fillRect(0, HORIZON, W, H - HORIZON);
 }
 
 function drawRoadside() {
@@ -580,6 +582,7 @@ function draw() {
   drawBackground();
   drawRoad();
   drawRoadside();
+  drawMountains(); // ridge overlaps the road top — traffic emerges from behind it
 
   // traffic, far to near
   const sorted = obstacles.slice().sort((a, b2) => b2.t - a.t);
