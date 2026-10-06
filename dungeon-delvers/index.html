@@ -1278,7 +1278,7 @@ function drawIndicators(){
   for(const h of party){
     if(h.downed)continue;
     const hx=h.x-cam.x, hy=h.y-cam.y;
-    if(h.moveT){ // pulsing ring at the walk destination
+    if(h.isPlayer&&h.moveT){ // pulsing ring at YOUR walk destination only
       const mx=h.moveT.x-cam.x, my=h.moveT.y-cam.y;
       const pr=13+Math.sin(elapsed*7)*3;
       ctx.strokeStyle="rgba(125,255,154,0.9)"; ctx.lineWidth=3;
