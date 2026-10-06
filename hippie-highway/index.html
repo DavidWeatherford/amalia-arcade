@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Hippie Highway! 🚐</title>
+<title>Highway Mania! 🚐</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #79c7e8;
     -webkit-user-select: none; user-select: none; touch-action: none; }
@@ -14,7 +14,7 @@
 <canvas id="game"></canvas>
 <script>
 "use strict";
-// ================= Hippie Highway! — a chase-cam lane-dodger for Amalia's Arcade =================
+// ================= Highway Mania! — a flat-road lane-dodger for Amalia's Arcade =================
 // Above-and-behind perspective: the road narrows to a horizon, traffic grows as it
 // approaches. You drive a 1960s VW van (rear 3/4 view) across 6 lanes.
 const canvas = document.getElementById("game");
@@ -246,7 +246,7 @@ function update(now) {
   dashPhase = (dashPhase + drift * dt) % 0.12;
   for (const r of roadside) {
     r.t -= drift * dt;
-    if (r.t < -0.05) { r.t = 1 + Math.random() * 0.1; r.side = Math.random() < 0.5 ? -1 : 1; r.off = LANES / 2 + 0.9 + Math.random() * 2.4; }
+    if (r.t < -0.22) { r.t = 1 + Math.random() * 0.1; r.side = Math.random() < 0.5 ? -1 : 1; r.off = LANES / 2 + 0.9 + Math.random() * 2.4; }
   }
 
   if (state !== STATE.PLAYING) return;
@@ -284,7 +284,7 @@ function update(now) {
     const o = obstacles[i];
     const prevT = o.t;
     o.t -= rate * dt;
-    if (o.t < -0.12) { obstacles.splice(i, 1); continue; }
+    if (o.t < -0.25) { obstacles.splice(i, 1); continue; }
     const dl = Math.abs(lanePos - o.lane);
     // collision as it crosses the van's plane
     if ((prevT > 0 && o.t <= 0.02 || Math.abs(o.t) < 0.07) && dl < 0.5) { endGame(); return; }
@@ -316,36 +316,17 @@ function rr(x, y, w, h, r) {
 }
 
 function drawBackground() {
-  const sky = ctx.createLinearGradient(0, 0, 0, HORIZON);
-  sky.addColorStop(0, "#5fb4e8"); sky.addColorStop(1, "#cfeefb");
-  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, HORIZON + 1);
-  // sun
-  ctx.fillStyle = "rgba(255,240,180,0.9)";
-  ctx.beginPath(); ctx.arc(W - 70, 64, 30, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = "#fff3c4";
-  ctx.beginPath(); ctx.arc(W - 70, 64, 22, 0, Math.PI * 2); ctx.fill();
-  // clouds
-  ctx.fillStyle = "rgba(255,255,255,0.92)";
-  const clouds = [[0.18, 0.10, 1], [0.55, 0.06, 0.7], [0.8, 0.16, 0.85]];
-  for (const [fx, fy, s] of clouds) {
-    const x = fx * W, y = fy * HORIZON + 20;
-    ctx.beginPath();
-    ctx.ellipse(x, y, 44 * s, 14 * s, 0, 0, Math.PI * 2);
-    ctx.ellipse(x - 30 * s, y + 5 * s, 26 * s, 10 * s, 0, 0, Math.PI * 2);
-    ctx.ellipse(x + 32 * s, y + 6 * s, 28 * s, 11 * s, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  // desert floor
-  const sand = ctx.createLinearGradient(0, HORIZON, 0, H);
+  // full-screen desert
+  const sand = ctx.createLinearGradient(0, 0, 0, H);
   sand.addColorStop(0, "#d99a55"); sand.addColorStop(1, "#c07f3e");
-  ctx.fillStyle = sand; ctx.fillRect(0, HORIZON, W, H - HORIZON);
+  ctx.fillStyle = sand; ctx.fillRect(0, 0, W, H);
 }
 
 function drawRoadside() {
   // far to near so near details overlap correctly
   const sorted = roadside.slice().sort((a, b2) => b2.t - a.t);
   for (const r of sorted) {
-    if (r.t < -0.05 || r.t > 1.05) continue;
+    if (r.t < -0.22 || r.t > 1.05) continue;
     const p = proj(r.side * r.off, r.t);
     const s = p.s;
     if (r.kind === "cactus") {
@@ -373,7 +354,7 @@ function drawRoadside() {
 function drawRoad() {
   // asphalt trapezoid, slightly past the van plane
   const RH = LANES / 2 + 0.2; // road half-width in lane units
-  const a = proj(-RH, 1.0), b2 = proj(RH, 1.0), c = proj(RH, -0.08), d = proj(-RH, -0.08);
+  const a = proj(-RH, 1.0), b2 = proj(RH, 1.0), c = proj(RH, -0.2), d = proj(-RH, -0.2);
   const g = ctx.createLinearGradient(0, HORIZON, 0, H);
   g.addColorStop(0, "#4a4a63"); g.addColorStop(1, "#38384e");
   ctx.fillStyle = g;
@@ -383,7 +364,7 @@ function drawRoad() {
   // yellow edge lines
   ctx.fillStyle = "#ffd23f";
   for (const e of [-RH + 0.15, RH - 0.15]) {
-    const p1 = proj(e, 1.0), p2 = proj(e, -0.08);
+    const p1 = proj(e, 1.0), p2 = proj(e, -0.2);
     ctx.beginPath();
     ctx.moveTo(p1.x - 2 * p1.s, p1.y); ctx.lineTo(p1.x + 2 * p1.s, p1.y);
     ctx.lineTo(p2.x + 2 * p2.s, p2.y); ctx.lineTo(p2.x - 2 * p2.s, p2.y);
@@ -393,8 +374,8 @@ function drawRoad() {
   ctx.fillStyle = "#f5f5f5";
   for (let i = 1; i < LANES; i++) {
     const bl = i - LANES / 2;   // lane-boundary offset
-    for (let t = 1.0 - dashPhase; t > -0.06; t -= 0.12) {
-      const p1 = proj(bl, Math.max(-0.06, t - 0.055)), p2 = proj(bl, t);
+    for (let t = 1.0 - dashPhase; t > -0.2; t -= 0.12) {
+      const p1 = proj(bl, Math.max(-0.2, t - 0.055)), p2 = proj(bl, t);
       const wdt = 2.2 * p1.s;
       ctx.beginPath();
       ctx.moveTo(p1.x - wdt, p1.y); ctx.lineTo(p1.x + wdt, p1.y);
@@ -576,7 +557,7 @@ function draw() {
   // traffic, far to near
   const sorted = obstacles.slice().sort((a, b2) => b2.t - a.t);
   for (const o of sorted) {
-    if (o.t < -0.1 || o.t > 1.1) continue;
+    if (o.t < -0.22 || o.t > 1.1) continue;
     const p = proj(o.lane - (LANES - 1) / 2, o.t);
     drawCar(p.x, p.y, p.s * VAN_S, o.ci);
   }
@@ -595,7 +576,7 @@ function draw() {
   drawBackButton();
   if (state === STATE.PLAYING) drawHUD();
   if (state === STATE.TITLE) {
-    const panel = drawPanel("HIPPIE HIGHWAY", [
+    const panel = drawPanel("HIGHWAY MANIA", [
       "Dodge the traffic in your groovy van!",
       "Arrows / A D or tap a side to switch lanes.",
       best > 0 ? ("Best cruise: " + best) : "How far can you roll?"
