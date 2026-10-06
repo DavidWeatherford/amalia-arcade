@@ -252,6 +252,16 @@ function genDungeon(seed){
   // D: one treasure chest per dungeon, tucked in a combat room
   const chr=choice([rooms[1],rooms[2]]);
   const chest={tx:randi(chr.x+1,chr.x+chr.w-2), ty:randi(chr.y+1,chr.y+chr.h-2), opened:false, bounce:0};
+  // E: barrel props tucked against walls (visual only)
+  for(const r of rooms){
+    if(rng()<0.7){
+      const fx=randi(r.x,r.x+r.w-1), fy=randi(r.y,r.y+r.h-1);
+      const walls=[];
+      for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]])
+        if(tiles[(fy+dy)*gw+fx+dx]===0)walls.push([dx,dy]);
+      if(walls.length)decor.push({tx:fx,ty:fy,kind:"barrel"});
+    }
+  }
   // traps in combat rooms
   const traps=[];
   for(const r of [rooms[1],rooms[2]]){
@@ -306,6 +316,7 @@ function updateFog(dt){
 // ================= ENTITIES =================
 let party=[], monsters=[], projectiles=[], loots=[], floaters=[], particles=[], effects=[];
 let hitstop=0, shake=0;
+let banner=null, curRoom=null, dungeonTotal=1; // E: objectives
 let cam={x:0,y:0}, elapsed=0, kills=0, bossSpawned=false, bossRef=null;
 let state="title"; // title | pick | play | win | lose
 let seedShown=0;
@@ -387,6 +398,7 @@ function startRun(clsKey){
   const me=party.find(h=>h.isPlayer);
   party.forEach(h=>{ if(!h.isPlayer)h.anchor=me; });
   populateRooms();
+  dungeonTotal=monsters.length+1; banner=null; curRoom=null;
   state="play"; sfx.click();
 }
 function addFloater(x,y,text,color,size){
@@ -773,6 +785,16 @@ function update(dt){
   elapsed+=dt; shake=Math.max(0,shake-dt*26);
   updateFog(dt); updateTraps(dt);
   const me=party.find(h=>h.isPlayer);
+  if(banner){ banner.t-=dt; if(banner.t<=0)banner=null; }
+  if(me&&!me.downed){ // E: objective banner on room entry
+    const ptx=Math.floor(me.x/TILE), pty=Math.floor(me.y/TILE);
+    const r=dung.rooms.find(r=>ptx>=r.x&&ptx<r.x+r.w&&pty>=r.y&&pty<r.y+r.h);
+    if(r&&r!==curRoom){ curRoom=r;
+      if(r.type==="combat")banner={text:"Defeat all the monsters!",t:3};
+      else if(r.type==="side")banner={text:"Find the treasure!",t:3};
+      else if(r.type==="boss")banner={text:"The boss awaits...",t:3.2};
+    }
+  }
   // boss trigger
   if(!bossSpawned){
     const br=dung.rooms[3];
@@ -942,6 +964,12 @@ function drawDungeon(){
     } else if(d.kind==="rubble"){
       ctx.fillStyle="rgba(140,140,160,0.5)";
       ctx.fillRect(x-10,y-2,7,5); ctx.fillRect(x,-8,6,6); ctx.fillRect(x+4,y+4,8,5);
+    } else if(d.kind==="barrel"){
+      ctx.fillStyle="rgba(0,0,0,0.35)";
+      ctx.beginPath(); ctx.ellipse(x,y+14,16,6,0,0,Math.PI*2); ctx.fill();
+      if(!spr2("prop_barrel",x,y+12,44,false)){
+        ctx.fillStyle="#8a5a2e"; ctx.fillRect(x-14,y-16,28,32);
+      }
     } else {
       ctx.strokeStyle="rgba(220,215,200,0.55)"; ctx.lineWidth=3;
       ctx.beginPath(); ctx.moveTo(x-9,y-6); ctx.lineTo(x+9,y+6); ctx.moveTo(x+9,y-6); ctx.lineTo(x-9,y+6); ctx.stroke();
@@ -1294,6 +1322,18 @@ function drawHUD(){
   const mm=String(Math.floor(elapsed/60)).padStart(2,"0"), ss=String(Math.floor(elapsed%60)).padStart(2,"0");
   ctx.fillStyle="#ffe9a8"; ctx.font="bold 20px sans-serif"; ctx.textAlign="center";
   ctx.fillText(mm+":"+ss,W/2,32);
+  ctx.fillStyle="#cfc3e8"; ctx.font="bold 13px sans-serif";
+  ctx.fillText("Monsters "+Math.min(kills,dungeonTotal)+"/"+dungeonTotal,W/2,52);
+  if(banner){ // E: objective banner, fades
+    ctx.globalAlpha=clamp(banner.t,0,1);
+    ctx.fillStyle="#1a1028";
+    const bw=ctx.measureText(banner.text).width+44;
+    ctx.beginPath(); ctx.roundRect(W/2-bw/2,64,bw,40,12); ctx.fill();
+    ctx.strokeStyle="#ffd76b"; ctx.lineWidth=2; ctx.stroke();
+    ctx.fillStyle="#ffd76b"; ctx.font="bold 20px sans-serif"; ctx.textAlign="center";
+    ctx.fillText(banner.text,W/2,91);
+    ctx.globalAlpha=1;
+  }
   // ability button
   const me=party.find(h=>h.isPlayer);
   if(me&&!me.downed){
