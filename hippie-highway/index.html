@@ -103,12 +103,13 @@ try { best = parseInt(localStorage.getItem(BEST_KEY) || "0", 10) || 0; } catch (
 function saveBest() { try { localStorage.setItem(BEST_KEY, String(best)); } catch (e) {} }
 
 // ---------- perspective ----------
+// off = lateral offset from road center in lane units (lane i sits at i - 2.5).
 // t = 1 at the horizon, t = 0 at the van's plane. zn flips it for scaling.
-function proj(lanePos, t) {
+function proj(off, t) {
   const zn = Math.max(0.02, 1 - t);
   const s = zn * zn;
   return {
-    x: CX + (lanePos - 2.5) * LANE_PX * s,
+    x: CX + off * LANE_PX * s,
     y: HORIZON + (PLAYER_Y - HORIZON) * s,
     s
   };
@@ -172,7 +173,7 @@ function endGame() {
   state = STATE.OVER;
   shake = 12;
   sfx.crash(); sfx.engineStop();
-  const p = proj(lanePos, 0);
+  const p = proj(lanePos - 2.5, 0);
   burst(p.x, p.y - 30, 16);
   const s = Math.floor(score);
   if (s > best) { best = s; newBest = s > 0; saveBest(); }
@@ -183,7 +184,7 @@ function moveLane(dir) {
   if (next === lane) return;
   lane = next; laneCooldown = 0.13;
   sfx.lane();
-  const p = proj(lanePos, 0);
+  const p = proj(lanePos - 2.5, 0);
   dust(p.x, p.y + 40, 4);
 }
 
@@ -292,7 +293,7 @@ function update(now) {
       o.passed = true;
       if (dl >= 0.5 && dl < 1.6) {
         score += 5;
-        const p = proj(lanePos, 0);
+        const p = proj(lanePos - 2.5, 0);
         popups.push({ x: p.x, y: p.y - 110, text: "CLOSE! +5", life: 0.8 });
         sfx.near();
       }
@@ -352,7 +353,7 @@ function drawRoadside() {
   const sorted = roadside.slice().sort((a, b2) => b2.t - a.t);
   for (const r of sorted) {
     if (r.t < -0.05 || r.t > 1.05) continue;
-    const p = proj(2.5 + r.side * r.off, r.t);
+    const p = proj(r.side * r.off, r.t);
     const s = p.s;
     if (r.kind === "cactus") {
       ctx.fillStyle = "#2e8b57";
@@ -534,18 +535,19 @@ function drawBackButton() {
 }
 
 function drawHUD() {
+  // dark pill so the score stays readable over the sky/sun
+  ctx.fillStyle = "rgba(20,32,52,0.55)";
+  rr(W - 118, 8, 106, 58, 14); ctx.fill();
   ctx.textAlign = "right";
-  ctx.fillStyle = "rgba(20,32,52,0.75)";
+  ctx.fillStyle = "#ffd23f";
   ctx.font = "700 14px -apple-system, sans-serif";
-  ctx.fillText("BEST " + best, W - 16, 24);
+  ctx.fillText("BEST " + best, W - 20, 28);
   const pop = 1 + scorePop * 0.7;
   ctx.save();
-  ctx.translate(W - 16, 48); ctx.scale(pop, pop);
-  ctx.font = "800 30px -apple-system, sans-serif";
+  ctx.translate(W - 20, 52); ctx.scale(pop, pop);
+  ctx.font = "800 28px -apple-system, sans-serif";
   ctx.fillStyle = "#ffffff";
-  ctx.strokeStyle = "rgba(20,32,52,0.6)"; ctx.lineWidth = 4;
-  const txt = String(Math.floor(score)).padStart(5, "0");
-  ctx.strokeText(txt, 0, 0); ctx.fillText(txt, 0, 0);
+  ctx.fillText(String(Math.floor(score)).padStart(5, "0"), 0, 0);
   ctx.restore();
   ctx.textAlign = "left";
 }
@@ -581,12 +583,12 @@ function draw() {
   const sorted = obstacles.slice().sort((a, b2) => b2.t - a.t);
   for (const o of sorted) {
     if (o.t < -0.1 || o.t > 1.1) continue;
-    const p = proj(o.lane, o.t);
+    const p = proj(o.lane - 2.5, o.t);
     drawCar(p.x, p.y, p.s * VAN_S, o.ci);
   }
 
   // the van
-  const vp = proj(lanePos, 0);
+  const vp = proj(lanePos - 2.5, 0);
   const lean = Math.max(-1, Math.min(1, (lane - lanePos)));
   if (state !== STATE.OVER) {
     drawVan(vp.x, vp.y, VAN_S, lean, false);
