@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Hippie Highway! 🚐</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #1a0f2e;
+    -webkit-user-select: none; user-select: none; touch-action: none; }
+  #game { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: pointer; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+"use strict";
+// ================= Hippie Highway! — a retro lane-dodger for Amalia's Arcade =================
+// Groovy blue 1960s VW van, 4 lanes, dodge the traffic. Rendered into a low-res
+// pixel buffer, then scaled up with smoothing off for that chunky retro look.
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const buf = document.createElement("canvas");
+const b = buf.getContext("2d");
+
+const LW = 240;                 // logical pixel width of the retro buffer
+let LH = 400, W = 0, H = 0, DPR = 1;
+
+const STATE = { TITLE: 0, PLAYING: 1, OVER: 2 };
+let state = STATE.TITLE;
+
+// ---------- sound effects (Web Audio, no files) ----------
+const sfx = (() => {
+  let ac = null;
+  function ensure() {
+    if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
+    if (ac && ac.state === "suspended") ac.resume();
+    return ac;
+  }
+  function tone(freq, delay, dur, type, vol, slideTo) {
+    const a = ensure(); if (!a) return;
+    const t = a.currentTime + delay;
+    const o = a.createOscillator(), g = a.createGain();
+    o.type = type || "square";
+    o.frequency.setValueAtTime(Math.max(30, freq), t);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(30, slideTo), t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol || 0.08, t + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(a.destination);
+    o.start(t); o.stop(t + dur + 0.05);
+  }
+  // --- engine hum ---
+  let eng = null;
+  function engineStart() {
+    const a = ensure(); if (!a || eng) return;
+    try {
+      const o1 = a.createOscillator(), o2 = a.createOscillator();
+      const f = a.createBiquadFilter(), g = a.createGain();
+      o1.type = "sawtooth"; o2.type = "sawtooth";
+      o1.frequency.value = 52; o2.frequency.value = 52.8;
+      f.type = "lowpass"; f.frequency.value = 260;
+      g.gain.value = 0.0;
+      g.gain.linearRampToValueAtTime(0.045, a.currentTime + 0.4);
+      o1.connect(f); o2.connect(f); f.connect(g); g.connect(a.destination);
+      o1.start(); o2.start();
+      eng = { o1, o2, g };
+    } catch (e) {}
+  }
+  function engineStop() {
+    if (!eng || !ac) { eng = null; return; }
+    try {
+      const e2 = eng; eng = null;
+      e2.g.gain.cancelScheduledValues(ac.currentTime);
+      e2.g.gain.linearRampToValueAtTime(0.0001, ac.currentTime + 0.25);
+      setTimeout(() => { try { e2.o1.stop(); e2.o2.stop(); } catch (x) {} }, 400);
+    } catch (e2x) { eng = null; }
+  }
+  // --- tiny chiptune bassline ---
+  const BASS = [110, 0, 130.81, 0, 146.83, 0, 130.81, 110, 98, 0, 110, 0, 146.83, 164.81, 130.81, 0];
+  let beatI = 0;
+  return {
+    unlock() { ensure(); },
+    lane()  { tone(520, 0, 0.07, "square", 0.05, 780); },
+    near()  { tone(900, 0, 0.12, "sine", 0.09, 1600); },
+    ping()  { tone(880, 0, 0.09, "square", 0.06); tone(1318, 0.08, 0.12, "square", 0.06); },
+    crash() {
+      tone(220, 0, 0.4, "sawtooth", 0.12, 40);
+      tone(110, 0.05, 0.5, "square", 0.1, 35);
+    },
+    start() { tone(392, 0, 0.09, "square", 0.07); tone(523, 0.09, 0.09, "square", 0.07); tone(659, 0.18, 0.16, "square", 0.07); },
+    musicBeat() {
+      const f = BASS[beatI % BASS.length]; beatI++;
+      if (f) tone(f, 0, 0.16, "triangle", 0.05);
+    },
+    engineStart, engineStop
+  };
+})();
+
+// ---------- persistent best ----------
+const BEST_KEY = "hippieHighway.best.v1";
+let best = 0;
+try { best = parseInt(localStorage.getItem(BEST_KEY) || "0", 10) || 0; } catch (e) {}
+function saveBest() { try { localStorage.setItem(BEST_KEY, String(best)); } catch (e) {} }
+
+// ---------- sprites (pre-rendered pixel art) ----------
+function makeSprite(w, h, drawFn) {
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  drawFn(c.getContext("2d"), w, h);
+  return c;
+}
+function rr(g, x, y, w, h, r) {
+  g.beginPath();
+  g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r);
+  g.closePath();
+}
+// The star of the show: a 1960s VW Type 2 van in classic VW blue, top-down, facing up.
+const VAN = makeSprite(30, 54, (g, w, h) => {
+  const BLUE = "#2e6fd8", CREAM = "#f5ead2", GLASS = "#173a5e";
+  g.fillStyle = "#1c1c22";                                    // wheels
+  g.fillRect(0, 10, 5, 10); g.fillRect(w - 5, 10, 5, 10);
+  g.fillRect(0, 36, 5, 10); g.fillRect(w - 5, 36, 5, 10);
+  g.fillStyle = BLUE; rr(g, 2, 2, w - 4, h - 4, 7); g.fill(); // body
+  g.fillStyle = CREAM;                                        // front V stripe
+  g.beginPath();
+  g.moveTo(w / 2, 24); g.lineTo(4, 4); g.lineTo(9, 4); g.lineTo(w / 2, 18);
+  g.closePath(); g.fill();
+  g.beginPath();
+  g.moveTo(w / 2, 24); g.lineTo(w - 4, 4); g.lineTo(w - 9, 4); g.lineTo(w / 2, 18);
+  g.closePath(); g.fill();
+  g.fillStyle = GLASS;                                        // split windshield
+  g.fillRect(6, 8, w - 12, 7);
+  g.fillStyle = CREAM; g.fillRect(w / 2 - 1, 8, 2, 7);
+  g.fillStyle = CREAM; g.fillRect(5, 26, w - 10, 14);          // roof
+  g.fillStyle = GLASS;                                        // windows
+  g.fillRect(6, h - 15, w - 12, 6);
+  g.fillRect(3, 28, 3, 10); g.fillRect(w - 6, 28, 3, 10);
+  g.fillStyle = "#f5f5f5";                                    // VW roundel
+  g.beginPath(); g.arc(w / 2, 21, 2.6, 0, 7); g.fill();
+  g.strokeStyle = BLUE; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(w / 2 - 1.2, 20); g.lineTo(w / 2, 22.2); g.lineTo(w / 2 + 1.2, 20); g.stroke();
+  g.fillStyle = "#ffe9a8";                                    // headlights
+  g.beginPath(); g.arc(5, 5, 2.2, 0, 7); g.fill();
+  g.beginPath(); g.arc(w - 5, 5, 2.2, 0, 7); g.fill();
+  g.fillStyle = "#cfd6dd";                                    // bumpers
+  g.fillRect(4, 0, w - 8, 2.5); g.fillRect(4, h - 2.5, w - 8, 2.5);
+});
+function carSprite(color, dark) {
+  return makeSprite(26, 46, (g, w, h) => {
+    g.fillStyle = "#1c1c22";
+    g.fillRect(0, 8, 4, 8); g.fillRect(w - 4, 8, 4, 8);
+    g.fillRect(0, 30, 4, 8); g.fillRect(w - 4, 30, 4, 8);
+    g.fillStyle = color; rr(g, 2, 2, w - 4, h - 4, 6); g.fill();
+    g.fillStyle = dark;
+    g.fillRect(5, 10, w - 10, 6);
+    g.fillStyle = "#173a5e";
+    g.fillRect(5, h - 17, w - 10, 8);
+    g.fillStyle = "#ffe9a8";
+    g.beginPath(); g.arc(5, h - 4, 2, 0, 7); g.fill();
+    g.beginPath(); g.arc(w - 5, h - 4, 2, 0, 7); g.fill();
+    g.fillStyle = "#cfd6dd"; g.fillRect(4, h - 2.5, w - 8, 2.5);
+  });
+}
+const CARS = [
+  carSprite("#d94040", "#a52f2f"),
+  carSprite("#2fa39a", "#1f7a74"),
+  carSprite("#e08a2e", "#a86420"),
+  carSprite("#8a5fbf", "#66428f"),
+];
+const CONE = makeSprite(12, 12, (g, w, h) => {
+  g.fillStyle = "#e8722a";
+  g.beginPath(); g.moveTo(2, h); g.lineTo(w / 2, 1); g.lineTo(w - 2, h); g.closePath(); g.fill();
+  g.fillStyle = "#f5f5f5"; g.fillRect(3.5, 6, w - 7, 2.5);
+  g.fillStyle = "#b34f16"; g.fillRect(1, h - 2, w - 2, 2);
+});
+
+// ---------- road geometry ----------
+let roadX = 40, roadW = 160, laneW = 40, playerY = 320;
+const LANES = 4;
+const laneX = i => roadX + laneW * (i + 0.5);
+
+// ---------- game state ----------
+let lane = 1, playerX = 0, laneCooldown = 0;
+let speed = 0, elapsed = 0, score = 0, prevScoreInt = 0, scorePop = 0;
+let obstacles = [];   // {lane, y, sprite, w, h, kind, passed}
+let spawnT = 0, dashOff = 0, beatT = 0;
+let cacti = [], speckles = [];
+let particles = [];
+let shake = 0, newBest = false, backBtn = null;
+let popups = [];      // {x, y, text, life}
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+  canvas.style.width = W + "px"; canvas.style.height = H + "px";
+  LH = Math.max(320, Math.min(480, Math.round(LW * H / W)));
+  buf.width = LW; buf.height = LH;
+  b.imageSmoothingEnabled = false;
+  roadW = 160; roadX = (LW - roadW) / 2; laneW = roadW / LANES;
+  playerY = LH - 84;
+  playerX = laneX(lane);
+  initScenery();
+}
+function initScenery() {
+  cacti = [];
+  for (let i = 0; i < 10; i++) {
+    const leftSide = Math.random() < 0.5;
+    cacti.push({
+      x: leftSide ? 4 + Math.random() * (roadX - 14) : roadX + roadW + 4 + Math.random() * (LW - roadX - roadW - 14),
+      y: Math.random() * LH, s: 0.7 + Math.random() * 0.8, kind: Math.random() < 0.7 ? "cactus" : "rock"
+    });
+  }
+  speckles = [];
+  for (let i = 0; i < 60; i++) speckles.push({ x: Math.random() * LW, y: Math.random() * LH });
+}
+window.addEventListener("resize", resize);
+
+// ---------- flow ----------
+function startGame() {
+  state = STATE.PLAYING;
+  elapsed = 0; score = 0; prevScoreInt = 0; scorePop = 0; newBest = false;
+  obstacles = []; particles = []; popups = []; shake = 0;
+  lane = 1; playerX = laneX(lane); laneCooldown = 0;
+  spawnT = 1.0; dashOff = 0; beatT = 0;
+  sfx.start(); sfx.engineStart();
+}
+function endGame() {
+  state = STATE.OVER;
+  shake = 10;
+  sfx.crash(); sfx.engineStop();
+  burst(playerX, playerY - 10, 14);
+  const s = Math.floor(score);
+  if (s > best) { best = s; newBest = s > 0; saveBest(); }
+}
+function moveLane(dir) {
+  if (state !== STATE.PLAYING || laneCooldown > 0) return;
+  const next = Math.max(0, Math.min(LANES - 1, lane + dir));
+  if (next === lane) return;
+  lane = next; laneCooldown = 0.14;
+  sfx.lane();
+  dust(playerX, playerY + 18, 4);
+}
+
+// ---------- input ----------
+window.addEventListener("keydown", e => {
+  sfx.unlock();
+  if (["ArrowLeft", "ArrowRight", "ArrowUp", " "].includes(e.key)) e.preventDefault();
+  if (e.repeat) return;
+  if (state !== STATE.PLAYING && (e.key === " " || e.key === "ArrowUp" || e.key === "Enter")) { startGame(); return; }
+  if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") moveLane(-1);
+  if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") moveLane(1);
+});
+function bufCoords(e) {
+  return { x: (e.clientX / W) * LW, y: (e.clientY / H) * LH };
+}
+canvas.addEventListener("pointerdown", e => {
+  sfx.unlock();
+  const p = bufCoords(e);
+  if (backBtn && p.x >= backBtn.x && p.x <= backBtn.x + backBtn.w &&
+      p.y >= backBtn.y && p.y <= backBtn.y + backBtn.h) { window.location.href = "../"; return; }
+  if (state !== STATE.PLAYING) { startGame(); return; }
+  moveLane(p.x < LW / 2 ? -1 : 1);
+});
+
+// ---------- particles & popups ----------
+function dust(x, y, n) {
+  for (let i = 0; i < n; i++) {
+    particles.push({ x: x + (Math.random() - 0.5) * 18, y: y - Math.random() * 5,
+      vx: (Math.random() - 0.5) * 40, vy: 40 + Math.random() * 80,
+      life: 0.35 + Math.random() * 0.25, maxLife: 0.6, size: 1.5 + Math.random() * 2.5, color: "#d9b380" });
+  }
+}
+function burst(x, y, n) {
+  const cols = ["#2e6fd8", "#f5ead2", "#ffb02e", "#888890"];
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 40 + Math.random() * 110;
+    particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+      life: 0.4 + Math.random() * 0.35, maxLife: 0.75, size: 2 + Math.random() * 3,
+      color: cols[(Math.random() * cols.length) | 0] });
+  }
+}
+
+// ---------- update ----------
+let lastT = 0, lastBlocked = [];
+function update(now) {
+  const dt = Math.min(0.05, (now - lastT) / 1000 || 0.016);
+  lastT = now;
+
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+  for (let i = popups.length - 1; i >= 0; i--) {
+    const p = popups[i];
+    p.y -= 22 * dt; p.life -= dt;
+    if (p.life <= 0) popups.splice(i, 1);
+  }
+  if (shake > 0) shake = Math.max(0, shake - dt * 30);
+  if (scorePop > 0) scorePop = Math.max(0, scorePop - dt);
+  if (laneCooldown > 0) laneCooldown -= dt;
+
+  // idle drift on the title screen
+  const drift = state === STATE.PLAYING ? speed : 26;
+  dashOff = (dashOff + drift * dt) % 26;
+  for (const c of cacti) { c.y += drift * 0.55 * dt; if (c.y > LH + 20) { c.y = -20; } }
+  for (const s of speckles) { s.y += drift * dt; if (s.y > LH) { s.y = 0; s.x = Math.random() * LW; } }
+
+  if (state !== STATE.PLAYING) return;
+  elapsed += dt;
+  speed = Math.min(150 + elapsed * 2.2, 360);      // gentle ~2-minute ramp
+
+  // chiptune bassline
+  beatT -= dt;
+  if (beatT <= 0) { sfx.musicBeat(); beatT = 0.19; }
+
+  // smooth lane glide + lean into the turn
+  const targetX = laneX(lane);
+  playerX += (targetX - playerX) * Math.min(1, dt * 12);
+
+  // spawn waves — never block every lane; alternate with the previous wave
+  spawnT -= dt;
+  if (spawnT <= 0) {
+    const free = [0, 1, 2, 3].filter(l => lastBlocked.indexOf(l) < 0);
+    const pool = free.length ? free : [0, 1, 2, 3];
+    const k = (elapsed > 45 && Math.random() < 0.45) ? 2 : 1;
+    const picks = [];
+    for (let i = 0; i < k && pool.length; i++) picks.push(pool.splice((Math.random() * pool.length) | 0, 1)[0]);
+    picks.forEach((ln, i) => {
+      const isCone = Math.random() < 0.22;
+      const sprite = isCone ? CONE : CARS[(Math.random() * CARS.length) | 0];
+      obstacles.push({ lane: ln, y: -50 - i * 46, sprite, w: sprite.width, h: sprite.height,
+        kind: isCone ? "cone" : "car", passed: false });
+    });
+    lastBlocked = picks.slice();
+    spawnT = Math.max(0.55, 1.15 - elapsed * 0.006);
+  }
+
+  const px0 = playerX - 11, px1 = playerX + 11, py0 = playerY - 20, py1 = playerY + 20;
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    const o = obstacles[i];
+    o.y += speed * dt;
+    if (o.y > LH + 60) { obstacles.splice(i, 1); continue; }
+    const ox = laneX(o.lane);
+    // near-miss bonus: squeezed past with room to spare
+    if (!o.passed && o.y > playerY + 24) {
+      o.passed = true;
+      if (Math.abs(ox - playerX) < (o.w / 2 + 15)) {
+        score += 5;
+        popups.push({ x: playerX, y: playerY - 34, text: "CLOSE! +5", life: 0.8 });
+        sfx.near();
+      }
+    }
+    // collision (forgiving boxes)
+    const ox0 = ox - o.w / 2 + 4, ox1 = ox + o.w / 2 - 4;
+    const oy0 = o.y - o.h / 2 + 5, oy1 = o.y + o.h / 2 - 5;
+    if (px0 < ox1 && px1 > ox0 && py0 < oy1 && py1 > oy0) { endGame(); return; }
+  }
+
+  // score
+  const before = Math.floor(score);
+  score += speed * dt * 0.03;
+  const after = Math.floor(score);
+  if (Math.floor(after / 100) > Math.floor(before / 100)) { sfx.ping(); scorePop = 0.6; }
+}
+
+// ---------- drawing (all in chunky pixel-buffer coords) ----------
+function drawBackground() {
+  const sky = b.createLinearGradient(0, 0, 0, LH);
+  sky.addColorStop(0, "#2b1b4d"); sky.addColorStop(0.45, "#7a2f5e");
+  sky.addColorStop(0.72, "#c65a3e"); sky.addColorStop(1, "#e8934a");
+  b.fillStyle = sky; b.fillRect(0, 0, LW, LH);
+  // pixel sun
+  b.fillStyle = "#ffd23f";
+  b.fillRect(LW / 2 - 18, 26, 36, 30);
+  b.fillStyle = "rgba(255,210,63,0.35)";
+  b.fillRect(LW / 2 - 24, 20, 48, 42);
+  // blocky mountains
+  b.fillStyle = "#4a2b5e";
+  for (let x = -20; x < LW + 20; x += 40) {
+    const mh = 26 + ((x * 7919) % 17);
+    b.fillRect(x, 96 - mh, 40, mh);
+  }
+  // desert floor
+  b.fillStyle = "#c9824a"; b.fillRect(0, 96, LW, LH - 96);
+  b.fillStyle = "rgba(120,60,25,0.45)";
+  for (const s of speckles) b.fillRect(s.x | 0, s.y | 0, 2, 2);
+  // cacti & rocks
+  for (const c of cacti) {
+    if (c.kind === "cactus") {
+      b.fillStyle = "#2e8b57";
+      const ch = 22 * c.s;
+      b.fillRect(c.x, c.y - ch, 6, ch);
+      b.fillRect(c.x - 6, c.y - ch + 6, 5, 10);
+      b.fillRect(c.x + 7, c.y - ch + 10, 5, 8);
+    } else {
+      b.fillStyle = "#8d8d99";
+      b.fillRect(c.x, c.y - 6 * c.s, 12 * c.s, 6 * c.s);
+    }
+  }
+  // road
+  b.fillStyle = "#3d3d55"; b.fillRect(roadX, 0, roadW, LH);
+  b.fillStyle = "#ffd23f";
+  b.fillRect(roadX, 0, 3, LH); b.fillRect(roadX + roadW - 3, 0, 3, LH);
+  b.fillStyle = "#f5f5f5";
+  for (let i = 1; i < LANES; i++) {
+    const x = roadX + laneW * i;
+    for (let y = -26 + dashOff; y < LH; y += 26) b.fillRect(x - 1, y, 2, 13);
+  }
+}
+
+function drawVan() {
+  b.save();
+  b.translate(Math.round(playerX), Math.round(playerY));
+  if (shake > 0) b.translate((Math.random() - 0.5) * shake * 0.4, (Math.random() - 0.5) * shake * 0.4);
+  const lean = Math.max(-1, Math.min(1, (laneX(lane) - playerX) / laneW));
+  b.rotate(lean * 0.1);
+  b.fillStyle = "rgba(0,0,0,0.25)";
+  b.beginPath(); b.ellipse(0, 4, 15, 26, 0, 0, Math.PI * 2); b.fill();
+  b.drawImage(VAN, -15, -27);
+  if (state === STATE.OVER) {
+    // X eyes on the windshield — bonked!
+    b.strokeStyle = "#1c1c22"; b.lineWidth = 2;
+    const wy = -27 + 11;
+    b.beginPath();
+    b.moveTo(-6, wy - 2.5); b.lineTo(-1, wy + 2.5); b.moveTo(-1, wy - 2.5); b.lineTo(-6, wy + 2.5);
+    b.moveTo(1, wy - 2.5); b.lineTo(6, wy + 2.5); b.moveTo(6, wy - 2.5); b.lineTo(1, wy + 2.5);
+    b.stroke();
+  }
+  b.restore();
+}
+
+function drawObstacles() {
+  for (const o of obstacles) {
+    const x = Math.round(laneX(o.lane)), y = Math.round(o.y);
+    b.fillStyle = "rgba(0,0,0,0.22)";
+    b.beginPath(); b.ellipse(x, y + 3, o.w / 2, o.h / 2, 0, 0, Math.PI * 2); b.fill();
+    b.drawImage(o.sprite, x - o.w / 2, y - o.h / 2);
+  }
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    b.globalAlpha = Math.max(0, p.life / p.maxLife);
+    b.fillStyle = p.color;
+    b.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+  }
+  b.globalAlpha = 1;
+}
+
+function drawPopups() {
+  b.textAlign = "center";
+  b.font = "bold 8px 'Courier New', monospace";
+  for (const p of popups) {
+    b.globalAlpha = Math.min(1, p.life * 2);
+    b.fillStyle = "#1c1c22"; b.fillText(p.text, p.x + 1, p.y + 1);
+    b.fillStyle = "#ffd23f"; b.fillText(p.text, p.x, p.y);
+  }
+  b.globalAlpha = 1; b.textAlign = "left";
+}
+
+function drawBackButton() {
+  const w = 56, h = 15, x = 5, y = 5;
+  backBtn = { x, y, w, h };
+  b.fillStyle = "rgba(20,10,30,0.72)";
+  b.fillRect(x, y, w, h);
+  b.strokeStyle = "#ffd23f"; b.lineWidth = 1;
+  b.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  b.fillStyle = "#ffd23f";
+  b.font = "bold 9px 'Courier New', monospace";
+  b.textAlign = "center"; b.textBaseline = "middle";
+  b.fillText("‹ Arcade", x + w / 2, y + h / 2 + 0.5);
+  b.textAlign = "left"; b.textBaseline = "alphabetic";
+}
+
+function drawHUD() {
+  b.textAlign = "right";
+  b.font = "bold 8px 'Courier New', monospace";
+  b.fillStyle = "#1c1c22"; b.fillText("BEST " + best, LW - 5, 13);
+  b.fillStyle = "#ffd23f"; b.fillText("BEST " + best, LW - 6, 12);
+  const pop = 1 + scorePop * 0.9;
+  b.save();
+  b.translate(LW - 6, 26); b.scale(pop, pop);
+  b.font = "bold 13px 'Courier New', monospace";
+  b.fillStyle = "#1c1c22"; b.fillText(String(Math.floor(score)).padStart(5, "0"), 1, 1);
+  b.fillStyle = "#ffffff"; b.fillText(String(Math.floor(score)).padStart(5, "0"), 0, 0);
+  b.restore();
+  b.textAlign = "left";
+}
+
+function drawPanel(title, lines, accent, blinkLine) {
+  const w = Math.min(LW - 30, 200), h = 92 + lines.length * 13;
+  const x = LW / 2 - w / 2, y = LH / 2 - h / 2 - 10;
+  b.fillStyle = "rgba(20,10,30,0.85)";
+  b.fillRect(x, y, w, h);
+  b.strokeStyle = accent; b.lineWidth = 2;
+  b.strokeRect(x + 1, y + 1, w - 2, h - 2);
+  b.textAlign = "center";
+  b.fillStyle = accent;
+  b.font = "bold 17px 'Courier New', monospace";
+  b.fillText(title, LW / 2, y + 30);
+  b.fillStyle = "#ffffff";
+  b.font = "bold 9px 'Courier New', monospace";
+  lines.forEach((ln, i) => b.fillText(ln, LW / 2, y + 52 + i * 13));
+  if (blinkLine && Math.floor(performance.now() / 450) % 2 === 0) {
+    b.fillStyle = "#ffd23f";
+    b.fillText(blinkLine, LW / 2, y + h - 14);
+  }
+  b.textAlign = "left";
+}
+
+function drawTitleVan(panelTop) {
+  const bounce = Math.sin(performance.now() / 300) * 3;
+  b.save();
+  b.translate(LW / 2, Math.max(58, panelTop - 50) + bounce);
+  b.scale(2, 2);
+  b.drawImage(VAN, -15, -27);
+  b.restore();
+}
+
+function draw() {
+  b.save();
+  if (shake > 0) b.translate((Math.random() - 0.5) * shake * 0.5, (Math.random() - 0.5) * shake * 0.5);
+  drawBackground();
+  drawObstacles();
+  drawVan();
+  drawParticles();
+  drawPopups();
+  drawBackButton();
+  if (state === STATE.PLAYING) drawHUD();
+  if (state === STATE.TITLE) {
+    const titleLines = [
+      "Dodge the traffic, man!",
+      "Arrows / A D or tap sides",
+      "to switch lanes.",
+      best > 0 ? ("Best cruise: " + best) : "How far can you roll?"
+    ];
+    const panelTop = LH / 2 - (92 + titleLines.length * 13) / 2 - 10;
+    drawTitleVan(panelTop);
+    drawPanel("HIPPIE HIGHWAY", titleLines, "#ffd23f", "- INSERT COIN -");
+  } else if (state === STATE.OVER) {
+    drawHUD();
+    drawPanel("WIPEOUT!", [
+      "Score: " + Math.floor(score) + (newBest ? "  NEW BEST!" : ""),
+      "Best: " + best,
+      "Far out! Tap to roll again."
+    ], "#ff5e78", null);
+  }
+  b.restore();
+
+  // blit the pixel buffer chunky, then scanlines for CRT flavor
+  ctx.imageSmoothingEnabled = false;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.drawImage(buf, 0, 0, W, H);
+  ctx.fillStyle = "rgba(0,0,0,0.08)";
+  for (let y = 0; y < H; y += 3) ctx.fillRect(0, y, W, 1);
+}
+
+// ---------- main loop ----------
+function frame(now) {
+  update(now);
+  draw();
+  requestAnimationFrame(frame);
+}
+resize();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
