@@ -211,7 +211,7 @@ const CLASSES={
 let dung=null; // {gw,gh,tiles,fog,rooms,seed}
 function genDungeon(seed){
   rng=mulberry32(seed);
-  const gw=64, gh=40;
+  const gw=88, gh=56; // bigger delve
   const tiles=new Uint8Array(gw*gh); // 0 wall, 1 floor
   const fog=new Uint8Array(gw*gh);   // 0 unseen, 1 explored, 2 visible
   const rooms=[];
@@ -223,31 +223,70 @@ function genDungeon(seed){
   }
   function carveCorridor(x1,y1,x2,y2){
     let x=x1,y=y1;
-    while(x!==x2){ tiles[y*gw+x]=1; tiles[clamp(y+1,0,gh-1)*gw+x]=1; x+=Math.sign(x2-x); }
-    while(y!==y2){ tiles[y*gw+x]=1; tiles[y*gw+clamp(x+1,0,gw-1)]=1; y+=Math.sign(y2-y); }
+    const hLeg=()=>{ while(x!==x2){ tiles[y*gw+x]=1; tiles[clamp(y+1,0,gh-1)*gw+x]=1; x+=Math.sign(x2-x); } };
+    const vLeg=()=>{ while(y!==y2){ tiles[y*gw+x]=1; tiles[y*gw+clamp(x+1,0,gw-1)]=1; y+=Math.sign(y2-y); } };
+    if(rng()<0.5){hLeg();vLeg();}else{vLeg();hLeg();} // random bend order
     tiles[y*gw+x]=1;
   }
-  const start=carveRoom(10,20,11,9);
-  const mid1=carveRoom(28,20,13,11);
-  const mid2=carveRoom(46,20,12,10);
-  const bossR=carveRoom(55,20,11,11);
-  carveCorridor(start.cx,start.cy,mid1.cx,mid1.cy);
-  carveCorridor(mid1.cx,mid1.cy,mid2.cx,mid2.cy);
-  carveCorridor(mid2.cx,mid2.cy,bossR.cx,bossR.cy);
-  rooms[1].type="combat"; rooms[2].type="combat"; rooms[3].type="boss"; rooms[0].type="start";
+  function overlaps(nx,ny,w,h,margin){
+    const x0=nx-((w/2)|0)-margin, y0=ny-((h/2)|0)-margin;
+    const x1=x0+w+margin*2, y1=y0+h+margin*2;
+    for(const r of rooms) if(x0<r.x+r.w&&x1>r.x&&y0<r.y+r.h&&y1>r.y) return true;
+    return false;
+  }
+  // start room near the left edge
+  const start=carveRoom(11,randi(20,34),randi(9,12),randi(8,10));
+  start.type="start";
+  // main chain: random walk that winds but trends outward, so every delve differs
+  const nMain=randi(5,7);
+  let prev=start, prevAng=0; // 0 = heading right, away from the left edge
+  for(let i=1;i<nMain;i++){
+    const isLast=i===nMain-1;
+    let placed=null;
+    for(let margin=2;margin>=1&&!placed;margin--){
+      for(let t=0;t<60&&!placed;t++){
+        const outA=Math.atan2(prev.cy-start.cy,prev.cx-start.cx);
+        const ang=outA*0.55+prevAng*0.2+rand(-1.3,1.3);
+        const dist=rand(13,20);
+        const nx=clamp(Math.round(prev.cx+Math.cos(ang)*dist),9,gw-10);
+        const ny=clamp(Math.round(prev.cy+Math.sin(ang)*dist),8,gh-9);
+        const w=isLast?randi(12,15):randi(8,14), h=isLast?randi(10,13):randi(7,11);
+        if(!overlaps(nx,ny,w,h,margin)) placed={nx,ny,w,h,ang};
+      }
+    }
+    if(!placed)break;
+    const r=carveRoom(placed.nx,placed.ny,placed.w,placed.h);
+    r.type="combat";
+    carveCorridor(prev.cx,prev.cy,r.cx,r.cy);
+    prev=r; prevAng=placed.ang;
+  }
+  rooms[rooms.length-1].type="boss"; // the far end of the delve
+  const combats=()=>rooms.filter(r=>r.type==="combat");
   // at most one small side room: harder monster + an upgrade
-  const sideAnchor=choice([rooms[1],rooms[2]]);
-  const sideDir=choice([-1,1]);
-  const sideR=carveRoom(sideAnchor.cx,sideAnchor.cy+sideDir*10,7,7);
-  carveCorridor(sideAnchor.cx,sideAnchor.cy,sideR.cx,sideR.cy);
-  sideR.type="side";
+  const anchors=combats().filter(r=>r!==prev);
+  if(anchors.length){
+    const sideAnchor=choice(anchors.length?anchors:combats());
+    let placed=null;
+    for(let t=0;t<60&&!placed;t++){
+      const ang=rand(0,Math.PI*2), dist=rand(10,15);
+      const nx=clamp(Math.round(sideAnchor.cx+Math.cos(ang)*dist),7,gw-8);
+      const ny=clamp(Math.round(sideAnchor.cy+Math.sin(ang)*dist),6,gh-7);
+      const w=randi(6,8),h=randi(6,8);
+      if(!overlaps(nx,ny,w,h,1)) placed={nx,ny,w,h};
+    }
+    if(placed){
+      const sideR=carveRoom(placed.nx,placed.ny,placed.w,placed.h);
+      carveCorridor(sideAnchor.cx,sideAnchor.cy,sideR.cx,sideR.cy);
+      sideR.type="side";
+    }
+  }
   // floor decorations (deterministic per seed)
   const decor=[];
   for(const r of rooms){
     const n=r.type==="boss"?6:randi(2,4);
     for(let i=0;i<n;i++)decor.push({tx:randi(r.x,r.x+r.w-1),ty:randi(r.y,r.y+r.h-1),kind:choice(["crack","rubble","bones"])});
   }
-  // wall torches: on wall tiles adjacent to room floor (A0c)
+  // wall torches: on wall tiles adjacent to room floor
   const torches=[];
   for(const r of rooms){
     const nt=r.type==="boss"?3:2;
@@ -259,10 +298,10 @@ function genDungeon(seed){
       if(walls.length){ const [tx,ty]=choice(walls); torches.push({tx,ty,phase:rand(0,6.28)}); }
     }
   }
-  // D: one treasure chest per dungeon, tucked in a combat room
-  const chr=choice([rooms[1],rooms[2]]);
+  // one treasure chest per dungeon, tucked in a combat room
+  const chr=choice(combats());
   const chest={tx:randi(chr.x+1,chr.x+chr.w-2), ty:randi(chr.y+1,chr.y+chr.h-2), opened:false, bounce:0};
-  // E: barrel props tucked against walls (visual only)
+  // barrel props tucked against walls (visual only)
   for(const r of rooms){
     if(rng()<0.7){
       const fx=randi(r.x,r.x+r.w-1), fy=randi(r.y,r.y+r.h-1);
@@ -274,11 +313,11 @@ function genDungeon(seed){
   }
   // traps in combat rooms
   const traps=[];
-  for(const r of [rooms[1],rooms[2]]){
-    const n=randi(2,4);
+  for(const r of combats()){
+    const n=randi(1,3);
     for(let i=0;i<n;i++){
       const tx=randi(r.x+1,r.x+r.w-2), ty=randi(r.y+1,r.y+r.h-2);
-      traps.push({tx,ty,kind:"spikes",t:rand(0,3),state:0,cd:0}); // state 0 idle,1 warning,2 striking
+      traps.push({tx,ty,kind:"spikes",t:rand(0,3),state:0,cd:0});
     }
   }
   return {gw,gh,tiles,fog,explored:new Uint8Array(gw*gh),rooms,traps,decor,torches,chest,seed,
@@ -311,6 +350,15 @@ function updateFog(dt){
   for(const e of party){
     if(e.downed)continue;
     const etx=Math.floor(e.x/TILE),ety=Math.floor(e.y/TILE);
+    // entering a room lights the whole room
+    for(const r of dung.rooms){
+      if(etx>=r.x&&etx<r.x+r.w&&ety>=r.y&&ety<r.y+r.h){
+        for(let ty=r.y;ty<r.y+r.h;ty++)for(let tx=r.x;tx<r.x+r.w;tx++){
+          fog[ty*gw+tx]=2; dung.explored[ty*gw+tx]=1;
+        }
+        break;
+      }
+    }
     const rT=Math.ceil(FOG_R/TILE);
     for(let ty=ety-rT;ty<=ety+rT;ty++)for(let tx=etx-rT;tx<=etx+rT;tx++){
       if(tx<0||ty<0||tx>=gw||ty>=gh)continue;
@@ -355,7 +403,7 @@ function spawnMonsterAt(type,x,y){
   const m=monsters[monsters.length-1]; m.x=x; m.y=y; return m;
 }
 function spawnBoss(){
-  const b=BOSSES[runBossKey], r=dung.rooms[3];
+  const b=BOSSES[runBossKey], r=dung.rooms.find(r=>r.type==="boss");
   const m={ kind:"boss", type:runBossKey, bossType:runBossKey, name:b.name, x:dung.px(r.cx), y:dung.py(r.cy), r:b.r,
     maxhp:b.hp, hp:b.hp, dmg:b.dmg, speed:b.speed, range:70, atkCd:1.4, atkT:0,
     xp:b.xp, behavior:"boss", color:b.color, threat:{}, target:null, wob:0, hitT:0,
@@ -398,7 +446,7 @@ function startRun(clsKey){
   elapsed=0; kills=0; bossSpawned=false; bossRef=null; runBossKey=choice(Object.keys(BOSSES));
   const others=["warrior","mage","cleric","ranger"].filter(k=>k!==clsKey);
   for(let i=others.length-1;i>0;i--){ const j=(rng()*(i+1))|0; const t=others[i]; others[i]=others[j]; others[j]=t; }
-  const r0=dung.rooms[0];
+  const r0=dung.rooms.find(r=>r.type==="start");
   [clsKey,others[0],others[1]].forEach((ck,i)=>{
     const h=makeHero(ck,ck===clsKey,i);
     h.x=dung.px(r0.cx-2+i*2); h.y=dung.py(r0.cy);
@@ -847,7 +895,7 @@ function update(dt){
   }
   // boss trigger
   if(!bossSpawned){
-    const br=dung.rooms[3];
+    const br=dung.rooms.find(r=>r.type==="boss");
     for(const h of party){
       const tx=Math.floor(h.x/TILE),ty=Math.floor(h.y/TILE);
       if(tx>=br.x&&tx<br.x+br.w&&ty>=br.y&&ty<br.y+br.h){ bossSpawned=true; spawnBoss(); break; }
@@ -1031,7 +1079,7 @@ function drawDungeon(){
     }
   }
   // boss room rune circle
-  const br=dung.rooms[3];
+  const br=dung.rooms.find(r=>r.type==="boss");
   const bx=(br.cx+0.5)*TILE-cam.x, by=(br.cy+0.5)*TILE-cam.y;
   if(fog[br.cy*gw+br.cx]===2){
     const pulse=0.35+Math.sin(elapsed*2)*0.15;
