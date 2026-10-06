@@ -102,10 +102,10 @@ function sprFrame(name,frame,sx,sy,size){
 }
 
 const BESTIARY={
-  crypt_imp:{ name:"Crypt Imp", hp:26, speed:120, dmg:5, range:44, atkCd:1.1, xp:8,
+  crypt_imp:{ name:"Crypt Imp", hp:46, speed:110, dmg:5, range:44, atkCd:1.6, xp:14,
     behavior:"chaser", r:14, color:"#7a5fa8",
     desc:"Flutters straight at you." },
-  skeleton_archer:{ name:"Skeleton Archer", hp:34, speed:85, dmg:7, range:300, atkCd:2.4, xp:12,
+  skeleton_archer:{ name:"Skeleton Archer", hp:62, speed:80, dmg:7, range:300, atkCd:3.0, xp:20,
     behavior:"shooter", r:15, color:"#cfc39a",
     desc:"Keeps its distance and fires bones." },
 };
@@ -113,8 +113,8 @@ const TRAPS={
   spikes:{ name:"Spike Trap", dmg:10, desc:"Telegraphed floor spikes." },
 };
 const BOSSES={
-  crypt_keeper:{ name:"The Crypt Keeper", hp:420, speed:70, dmg:12, r:30, color:"#5e2f8f", xp:80,
-    desc:"Slams the ground and calls his bats." },
+  crypt_keeper:{ name:"The Crypt Keeper", hp:680, speed:62, dmg:12, r:30, color:"#5e2f8f", xp:130,
+    desc:"Slams the ground and calls his imps." },
 };
 const LOOT_TABLE=[
   { kind:"weapon", stat:"atk", min:2, max:5, name:"Rusty Sword" },
@@ -126,13 +126,13 @@ const LOOT_TABLE=[
 const RARITY=[ {n:"Common",c:"#b8b8c8",mult:1}, {n:"Magic",c:"#5aa9ff",mult:1.6}, {n:"Epic",c:"#c86bff",mult:2.4} ];
 
 const CLASSES={
-  warrior:{ name:"Warrior", color:"#4a90d9", hp:120, atk:9, def:6, speed:200, range:64, atkCd:0.9,
+  warrior:{ name:"Warrior", color:"#4a90d9", hp:145, atk:9, def:6, speed:190, range:64, atkCd:1.2,
     threatMul:2.0, ability:"Shield Wall", abilityDesc:"5s: half damage, taunt all",
     desc:"Tank. Draws aggro, shrugs off hits." },
-  mage:{ name:"Mage", color:"#a86bff", hp:70, atk:18, def:2, speed:200, range:300, atkCd:1.2,
+  mage:{ name:"Mage", color:"#a86bff", hp:90, atk:18, def:2, speed:190, range:300, atkCd:1.6,
     threatMul:1.0, ability:"Fireball", abilityDesc:"Tap a spot: big boom",
     desc:"Glass cannon. Huge damage, fragile." },
-  cleric:{ name:"Cleric", color:"#ffd76b", hp:85, atk:7, def:3, speed:200, range:260, atkCd:1.1,
+  cleric:{ name:"Cleric", color:"#ffd76b", hp:105, atk:7, def:3, speed:190, range:260, atkCd:1.4,
     threatMul:0.8, ability:"Heal Burst", abilityDesc:"Heal the whole party",
     desc:"Healer. Keeps everyone standing." },
 };
@@ -191,34 +191,6 @@ function genDungeon(seed){
     px:(tx)=>(tx+0.5)*TILE, py:(ty)=>(ty+0.5)*TILE,
     tileAt:(px,py)=>{ const tx=Math.floor(px/TILE),ty=Math.floor(py/TILE); return (tx<0||ty<0||tx>=gw||ty>=gh)?0:tiles[ty*gw+tx]; } };
 }
-// BFS pathfinding on the tile grid
-function findPath(sx,sy,tx,ty){
-  const {gw,gh,tiles}=dung;
-  const stx=clamp(Math.floor(sx/TILE),0,gw-1), sty=clamp(Math.floor(sy/TILE),0,gh-1);
-  const etx=clamp(Math.floor(tx/TILE),0,gw-1), ety=clamp(Math.floor(ty/TILE),0,gh-1);
-  if(!tiles[ety*gw+etx]){ // nudge target to nearest floor
-    let best=null,bd=1e9;
-    for(let y=0;y<gh;y++)for(let x=0;x<gw;x++) if(tiles[y*gw+x]){ const d=Math.abs(x-etx)+Math.abs(y-ety); if(d<bd){bd=d;best=[x,y];} }
-    if(!best)return null;
-    return findPath(sx,sy,(best[0]+0.5)*TILE,(best[1]+0.5)*TILE);
-  }
-  const prev=new Int32Array(gw*gh).fill(-1);
-  const q=[sty*gw+stx]; prev[sty*gw+stx]=sty*gw+stx;
-  while(q.length){
-    const cur=q.shift(); const cx=cur%gw, cy=(cur/gw)|0;
-    if(cx===etx&&cy===ety)break;
-    for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
-      const nx=cx+dx,ny=cy+dy;
-      if(nx<0||ny<0||nx>=gw||ny>=gh||!tiles[ny*gw+nx]||prev[ny*gw+nx]!==-1)continue;
-      prev[ny*gw+nx]=cur; q.push(ny*gw+nx);
-    }
-  }
-  if(prev[ety*gw+etx]===-1)return null;
-  const path=[]; let cur=ety*gw+etx;
-  while(cur!==sty*gw+stx){ path.push(cur); cur=prev[cur]; }
-  path.reverse();
-  return path.map(c=>({x:(c%gw+0.5)*TILE, y:(((c/gw)|0)+0.5)*TILE}));
-}
 // line of sight for fog of war
 function hasLOS(x0,y0,x1,y1){
   const {gw,gh,tiles}=dung;
@@ -258,7 +230,8 @@ function updateFog(dt){
 
 
 // ================= ENTITIES =================
-let party=[], monsters=[], projectiles=[], loots=[], floaters=[], particles=[];
+let party=[], monsters=[], projectiles=[], loots=[], floaters=[], particles=[], effects=[];
+let hitstop=0;
 let cam={x:0,y:0}, elapsed=0, kills=0, bossSpawned=false, bossRef=null;
 let state="title"; // title | pick | play | win | lose
 let seedShown=0;
@@ -338,6 +311,10 @@ function startRun(clsKey){
 function addFloater(x,y,text,color,size){
   floaters.push({x,y,text,color:color||"#fff",size:size||16,t:0,life:1.4});
 }
+function addSlash(x,y,angle,color){ effects.push({kind:"slash",x,y,angle,color:color||"#ffe9a8",t:0,life:0.22}); }
+function addBoom(x,y,r){ effects.push({kind:"boom",x,y,r:r||70,t:0,life:0.35}); }
+function addScorch(x,y,r){ effects.push({kind:"scorch",x,y,r:r||44,t:0,life:5}); }
+function addHealRing(x,y){ effects.push({kind:"healring",x,y,t:0,life:0.6}); }
 function burst(x,y,n,color){
   for(let i=0;i<n;i++)particles.push({x,y,vx:rand(-160,160),vy:rand(-200,40),t:0,life:rand(0.3,0.7),color});
 }
@@ -360,11 +337,11 @@ function dealDamage(src,dst,amount){
   sfx.hit();
   if(dst.hp<=0){
     dst.hp=0;
-    if(dst.kind==="hero"){ dst.downed=true; dst.path=null; dst.atkTarget=null;
+    if(dst.kind==="hero"){ dst.downed=true; dst.moveT=null; dst.atkTarget=null;
       addFloater(dst.x,dst.y-30,"DOWN!","#ff5e78",20); sfx.die();
       if(party.every(h=>h.downed)){ state="lose"; }
     } else {
-      kills++; sfx.die();
+      kills++; sfx.die(); hitstop=Math.max(hitstop,0.06);
       burst(dst.x,dst.y,14,"#c86bff");
       gainXP(dst.xp);
       maybeDropLoot(dst);
@@ -375,6 +352,7 @@ function dealDamage(src,dst,amount){
 }
 function healTarget(src,dst,amount){
   if(dst.downed||dst.hp<=0)return;
+  addHealRing(dst.x,dst.y);
   const st=heroStats(dst);
   const real=Math.min(amount,st.maxhp-dst.hp);
   if(real<=0)return;
@@ -442,21 +420,44 @@ function useAbility(h,tx,ty){
     addFloater(h.x,h.y-36,"HEAL BURST!","#7dff9a",18); return true;
   }
 }
-// ================= MOVEMENT & AI =================
-function moveAlongPath(e,dt){
-  if(!e.path||!e.path.length){e.path=null;return;}
-  const wp=e.path[0];
-  const d=dist(e.x,e.y,wp.x,wp.y);
-  e.face=Math.atan2(wp.y-e.y,wp.x-e.x);
-  const step=e.speed*dt;
-  const px=e.x, py=e.y;
-  if(d<=step+2){ e.x=wp.x;e.y=wp.y;e.path.shift(); if(!e.path.length)e.path=null; }
-  else { e.x+=(wp.x-e.x)/d*step; e.y+=(wp.y-e.y)/d*step; }
-  if(dung.tileAt(e.x,e.y)===0){ e.x=px; e.y=py; e.path=null; } // shouldn't happen; bail safely
+// ================= MOVEMENT & AI (free steering, no grid) =================
+function tileAtTx(tx,ty){ const {gw,gh,tiles}=dung; return (tx<0||ty<0||tx>=gw||ty>=gh)?0:tiles[ty*gw+tx]; }
+function circleHitsWall(x,y,r){
+  const x0=Math.floor((x-r)/TILE), x1=Math.floor((x+r)/TILE);
+  const y0=Math.floor((y-r)/TILE), y1=Math.floor((y+r)/TILE);
+  for(let ty=y0;ty<=y1;ty++)for(let tx=x0;tx<=x1;tx++){
+    if(tileAtTx(tx,ty)===0){
+      const cx=clamp(x,tx*TILE,tx*TILE+TILE), cy=clamp(y,ty*TILE,ty*TILE+TILE);
+      const dx=x-cx, dy=y-cy;
+      if(dx*dx+dy*dy<r*r)return true;
+    }
+  }
+  return false;
 }
-function orderMove(e,tx,ty,keepTarget){
-  const p=findPath(e.x,e.y,tx,ty);
-  if(p){e.path=p;e.moveT=null;if(!keepTarget)e.atkTarget=null;}
+// steer straight at the target, sliding along walls; returns true when arrived
+function steerMove(e,tx,ty,dt){
+  const dx=tx-e.x, dy=ty-e.y, d=Math.hypot(dx,dy);
+  if(d<6){ e.moving=false; e.moveT=null; return true; }
+  e.face=Math.atan2(dy,dx);
+  const step=Math.min(e.speed*dt,d), ux=dx/d, uy=dy/d, rad=e.r*0.7;
+  const px=e.x, py=e.y;
+  if(!circleHitsWall(e.x+ux*step,e.y+uy*step,rad)){ e.x+=ux*step; e.y+=uy*step; }
+  else if(!circleHitsWall(e.x+ux*step,e.y,rad)){ e.x+=ux*step; }
+  else if(!circleHitsWall(e.x,e.y+uy*step,rad)){ e.y+=uy*step; }
+  else { // wedged on a corner: slide perpendicular, flip side when stuck
+    const s=e.slideSign||1;
+    if(!circleHitsWall(e.x-uy*step*s,e.y+ux*step*s,rad)){ e.x+=-uy*step*s; e.y+=ux*step*s; }
+    else if(!circleHitsWall(e.x+uy*step*s,e.y-ux*step*s,rad)){ e.x+=uy*step*s; e.y-=ux*step*s; }
+  }
+  const moved=Math.hypot(e.x-px,e.y-py);
+  e.moving=moved>0.4;
+  e.stuckT=(e.stuckT||0)+dt;
+  if(moved>step*0.3)e.stuckT=0;
+  else if(e.stuckT>0.6){ e.slideSign=-(e.slideSign||1); e.stuckT=0; }
+  return false;
+}
+function orderMove(e,tx,ty){
+  e.moveT={x:tx,y:ty}; e.atkTarget=null;
 }
 function basicAttack(att,dst){
   const st=att.kind==="hero"?heroStats(att):{atk:att.dmg};
@@ -468,6 +469,7 @@ function basicAttack(att,dst){
       dmg:st.atk,friendly:true,aoe:0,color:att.cls==="mage"?"#c86bff":"#ffe9a8",from:att,kind:"bolt",target:dst});
     sfx.shoot();
   } else {
+    addSlash(dst.x,dst.y,Math.atan2(dst.y-att.y,dst.x-att.x),"#ffe9a8");
     dealDamage(att,dst,st.atk*rand(0.9,1.1)); sfx.swing();
   }
   att.atkT=att.atkCd;
@@ -486,16 +488,16 @@ function npcAI(h,dt){
     for(const p of party){ if(p.downed||p===h)continue; const s2=heroStats(p); const r=p.hp/s2.maxhp; if(r<lr){lr=r;low=p;} }
     const meR=h.hp/heroStats(h).maxhp;
     if(low&&lr<0.7&&nd<9999){ // heal has range
-      if(dist(h.x,h.y,low.x,low.y)<320){ healTarget(h,low,18+h.level*3); h.atkT=1.2; }
+      if(dist(h.x,h.y,low.x,low.y)<320){ h.moveT=null; healTarget(h,low,18+h.level*3); h.atkT=1.2; h.moving=false; }
       else orderMove(h,low.x,low.y);
       return;
     }
-    if(meR<0.5){ healTarget(h,h,18+h.level*3); h.atkT=1.2; return; }
+    if(meR<0.5){ h.moveT=null; healTarget(h,h,18+h.level*3); h.atkT=1.2; h.moving=false; return; }
     // revive nearest downed ally
     const down=party.find(p=>p.downed);
     if(down){ h.reviveT=down; orderMove(h,down.x,down.y); return; }
     if(nm&&nd<340){ // plink at enemies when nothing to heal
-      if(nd<=h.range){ if(h.atkT<=0)basicAttack(h,nm); } else orderMove(h,nm.x,nm.y);
+      if(nd<=h.range){ h.moveT=null; if(h.atkT<=0)basicAttack(h,nm); h.moving=false; } else orderMove(h,nm.x,nm.y);
       return;
     }
     followAnchor(h); return;
@@ -510,7 +512,7 @@ function npcAI(h,dt){
       }
       if(nd>h.range*0.8)orderMove(h,nm.x,nm.y);
       else if(nd<h.range*0.4)orderMove(h,h.x+(h.x-nm.x),h.y+(h.y-nm.y)); // kite
-      else { h.path=null; if(h.atkT<=0)basicAttack(h,nm); }
+      else { h.moveT=null; if(h.atkT<=0)basicAttack(h,nm); h.moving=false; }
       return;
     }
     followAnchor(h); return;
@@ -519,7 +521,7 @@ function npcAI(h,dt){
   if(nm){
     const mr=CLASSES.warrior.range;
     if(nd>mr){ orderMove(h,nm.x,nm.y); }
-    else { h.path=null; if(h.atkT<=0)basicAttack(h,nm); }
+    else { h.moveT=null; if(h.atkT<=0)basicAttack(h,nm); h.moving=false; }
     if(hpFrac(h)<0.45&&h.abilityCd<=0)useAbility(h);
     return;
   }
@@ -529,7 +531,7 @@ function hpFrac(h){ const s=heroStats(h); return h.hp/s.maxhp; }
 function followAnchor(h){
   const a=h.anchor||h;
   const d=dist(h.x,h.y,a.x,a.y);
-  if(d>130&&(!h.path||!h.path.length))orderMove(h,a.x+rand(-60,60),a.y+rand(-60,60));
+  if(d>130&&!h.moveT)orderMove(h,a.x+rand(-60,60),a.y+rand(-60,60));
 }
 // --- monster AI ---
 function monsterAI(m,dt){
@@ -538,13 +540,12 @@ function monsterAI(m,dt){
   m.face=Math.atan2(t.y-m.y,t.x-m.x);
   const d=dist(m.x,m.y,t.x,t.y);
   if(m.behavior==="chaser"||m.behavior==="boss"){
-    if(d>m.range*0.8){ const p=findPath(m.x,m.y,t.x,t.y); if(p&&p.length>3){m.path=p.slice(0,3);} else m.path=null;
-      if(m.path)moveAlongPath(m,dt); else { const a=Math.atan2(t.y-m.y,t.x-m.x); tryStep(m,a,dt); } }
-    else { m.path=null; if(m.atkT<=0){ dealDamage(m,t,m.dmg); m.atkT=m.atkCd; } }
+    if(d>m.range*0.8)steerMove(m,t.x,t.y,dt);
+    else { m.moving=false; if(m.atkT<=0){ addSlash(t.x,t.y,m.face,"#ff6b7a"); dealDamage(m,t,m.dmg); m.atkT=m.atkCd; } }
   } else if(m.behavior==="shooter"){
-    if(d<m.range*0.6){ const a=Math.atan2(m.y-t.y,m.x-t.x); tryStep(m,a,dt); }
-    else if(d>m.range){ const p=findPath(m.x,m.y,t.x,t.y); m.path=p?p.slice(0,2):null; if(m.path)moveAlongPath(m,dt); }
-    else m.path=null;
+    if(d<m.range*0.6)steerMove(m,m.x+(m.x-t.x),m.y+(m.y-t.y),dt);
+    else if(d>m.range)steerMove(m,t.x,t.y,dt);
+    else m.moving=false;
     if(d<m.range&&m.atkT<=0){
       const a=Math.atan2(t.y-m.y,t.x-m.x);
       projectiles.push({x:m.x,y:m.y,vx:Math.cos(a)*300,vy:Math.sin(a)*300,r:6,dmg:m.dmg,friendly:false,color:"#e8e0c0",from:m,kind:"bone"});
@@ -553,18 +554,13 @@ function monsterAI(m,dt){
   }
   if(m.behavior==="boss")bossAI(m,dt,d);
 }
-function tryStep(m,a,dt){
-  const nx=m.x+Math.cos(a)*m.speed*dt, ny=m.y+Math.sin(a)*m.speed*dt;
-  if(dung.tileAt(nx,m.y)!==0)m.x=nx;
-  if(dung.tileAt(m.x,ny)!==0)m.y=ny;
-}
 function bossAI(m,dt,d){
   m.slamT-=dt; m.summonT-=dt;
   if(m.telegraph){
     m.telegraph.t-=dt;
     if(m.telegraph.t<=0){
       const {x,y,r}=m.telegraph;
-      burst(x,y,20,"#ff5e78"); sfx.boom();
+      burst(x,y,20,"#ff5e78"); sfx.boom(); addBoom(x,y,r);
       for(const h of party)if(!h.downed&&dist(h.x,h.y,x,y)<r)dealDamage(m,h,m.dmg*1.6);
       m.telegraph=null;
     }
@@ -572,14 +568,14 @@ function bossAI(m,dt,d){
   }
   if(m.slamT<=0&&d<400){
     const t=m.target;
-    m.telegraph={x:t.x,y:t.y,r:130,t:1.2};
+    m.telegraph={x:t.x,y:t.y,r:130,t:1.4};
     addFloater(t.x,t.y-40,"INCOMING!","#ff5e78",18);
-    m.slamT=rand(9,13); sfx.roar();
+    m.slamT=rand(10,14); sfx.roar();
   }
   if(m.summonT<=0&&monsters.length<7){
     for(let i=0;i<2;i++)spawnMonster("crypt_imp",clamp(Math.floor(m.x/TILE)+randi(-3,3),1,dung.gw-2),clamp(Math.floor(m.y/TILE)+randi(-3,3),1,dung.gh-2));
     addFloater(m.x,m.y-50,"Minions, rise!","#c86bff",18);
-    m.summonT=rand(16,22);
+    m.summonT=rand(18,24);
   }
 }
 // --- traps ---
@@ -622,13 +618,13 @@ function onTap(px,py){
   // tap a monster? -> attack it
   let bestM=null,bd=52;
   for(const m of monsters){ const d=dist(wx,wy,m.x,m.y); if(d<bd+m.r){bd=d;bestM=m;} }
-  if(bestM){ me.atkTarget=bestM; me.path=null; me.moveT=null; return; }
+  if(bestM){ me.atkTarget=bestM; me.moveT=null; return; }
   // tap an ally? -> cleric heals, others walk to them
   let bestA=null; bd=52;
   for(const h of party){ if(h===me||h.downed)continue; const d=dist(wx,wy,h.x,h.y); if(d<bd){bd=d;bestA=h;} }
   if(bestA){
     if(me.cls==="cleric"){ // walk into range then heal
-      me.healTarget=bestA; me.path=null;
+      me.healTarget=bestA; me.moveT=null;
       if(dist(me.x,me.y,bestA.x,bestA.y)>300)orderMove(me,bestA.x,bestA.y);
       else { healTarget(me,bestA,22+me.level*4); me.atkT=1.0; me.healTarget=null; }
     } else orderMove(me,bestA.x,bestA.y);
@@ -637,7 +633,7 @@ function onTap(px,py){
   // tap a downed ally -> go revive
   for(const h of party){ if(!h.downed)continue; if(dist(wx,wy,h.x,h.y)<56){ me.reviveT=h; orderMove(me,h.x,h.y); return; } }
   // otherwise walk there
-  abilityTargeting=false; me.reviveT=null; me.healTarget=null;
+  abilityTargeting=false; me.reviveT=null; me.healTarget=null; me.atkTarget=null;
   orderMove(me,wx,wy);
 }
 canvas.addEventListener("pointerdown",e=>{ e.preventDefault(); onTap(e.clientX,e.clientY); });
@@ -660,12 +656,12 @@ function update(dt){
     if(h.downed)continue;
     h.atkT-=dt; h.abilityCd-=dt; h.shieldT-=dt; h.wob+=dt*6;
     if(h.isPlayer)playerCombat(h,dt); else npcAI(h,dt);
-    moveAlongPath(h,dt);
+    if(h.moveT&&!h.atkTarget)steerMove(h,h.moveT.x,h.moveT.y,dt);
     // revive channel
     if(h.reviveT){
       const d=h.reviveT;
       if(d.downed&&dist(h.x,h.y,d.x,d.y)<56){
-        h.path=null; d.reviveT=(d.reviveT||0)+dt;
+        h.moveT=null; d.reviveT=(d.reviveT||0)+dt;
         if(Math.floor(d.reviveT*4)!==Math.floor((d.reviveT-dt)*4))burst(d.x,d.y-20,3,"#7dff9a");
         if(d.reviveT>=2){ d.downed=false; const s=heroStats(d); d.hp=Math.round(s.maxhp*0.5); d.reviveT=0; h.reviveT=null;
           addFloater(d.x,d.y-36,"REVIVED!","#7dff9a",18); sfx.level(); }
@@ -675,13 +671,13 @@ function update(dt){
     if(h.healTarget){
       const t=h.healTarget;
       if(t.downed||t.hp>=heroStats(t).maxhp){h.healTarget=null;}
-      else if(dist(h.x,h.y,t.x,t.y)<300){ h.path=null; if(h.atkT<=0){healTarget(h,t,22+h.level*4);h.atkT=1.0;h.healTarget=null;} }
+      else if(dist(h.x,h.y,t.x,t.y)<300){ h.moveT=null; if(h.atkT<=0){healTarget(h,t,22+h.level*4);h.atkT=1.0;h.healTarget=null;} }
     }
     // loot pickup
     for(let i=loots.length-1;i>=0;i--){ const l=loots[i];
       if(dist(h.x,h.y,l.x,l.y)<34){ pickupLoot(h,l); loots.splice(i,1); } }
   }
-  for(const m of monsters){ m.atkT-=dt; m.hitT-=dt; m.wob+=dt*5; if(!m.target||m.target.downed)retarget(m); monsterAI(m,dt); moveAlongPath(m,dt); }
+  for(const m of monsters){ m.atkT-=dt; m.hitT-=dt; m.wob+=dt*5; if(!m.target||m.target.downed)retarget(m); monsterAI(m,dt); }
   // projectiles
   for(let i=projectiles.length-1;i>=0;i--){ const p=projectiles[i];
     // homing: friendly bolts track their target
@@ -693,6 +689,7 @@ function update(dt){
       const na=cur+clamp(da,-7*dt,7*dt), sp=Math.hypot(p.vx,p.vy);
       p.vx=Math.cos(na)*sp; p.vy=Math.sin(na)*sp;
     }
+    if(p.kind==="fireball")particles.push({x:p.x+rand(-5,5),y:p.y+rand(-5,5),vx:rand(-50,50),vy:rand(-60,10),t:0,life:rand(0.25,0.45),color:choice(["#ff9f2e","#ff6b2e","#ffd76b"])});
     p.x+=p.vx*dt; p.y+=p.vy*dt; p.life=(p.life||3)-dt;
     let hit=false;
     if(p.kind==="fireball"&&dist(p.x,p.y,p.tx,p.ty)<24){ hit=true; } // reached target -> boom
@@ -705,6 +702,7 @@ function update(dt){
     if(hit||p.life<=0){
       if(p.kind==="fireball"){
         burst(p.x,p.y,22,"#ff9f2e"); sfx.boom();
+        addBoom(p.x,p.y,p.aoe); addScorch(p.x,p.y,p.aoe*0.6);
         for(const m of [...monsters])if(dist(p.x,p.y,m.x,m.y)<p.aoe)dealDamage(p.from,m,p.dmg);
       } else if(p.friendly){
         for(const m of [...monsters])if(dist(p.x,p.y,m.x,m.y)<m.r+p.r+4){ dealDamage(p.from,m,p.dmg); break; }
@@ -718,6 +716,8 @@ function update(dt){
   floaters=floaters.filter(f=>f.t<f.life);
   for(const p of particles){p.t+=dt;p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=500*dt;}
   particles=particles.filter(p=>p.t<p.life);
+  for(const e of effects)e.t+=dt;
+  effects=effects.filter(e=>e.t<e.life);
   // camera follows player
   if(me){ cam.x=clamp(me.x-W/2,0,Math.max(0,dung.gw*TILE-W)); cam.y=clamp(me.y-H/2,0,Math.max(0,dung.gh*TILE-H)); }
 }
@@ -727,10 +727,8 @@ function playerCombat(me,dt){
   if(!t)return;
   const range=CLASSES[me.cls].range;
   const d=dist(me.x,me.y,t.x,t.y);
-  me.repathT=(me.repathT||0)-dt;
-  if(d>range*0.9){
-    if(me.repathT<=0){orderMove(me,t.x,t.y,true);me.repathT=0.5;} // keepTarget: pursue until dead
-  } else { me.path=null; if(me.atkT<=0)basicAttack(me,t); }
+  if(d>range*0.9)steerMove(me,t.x,t.y,dt); // pursue until in range — target stays locked
+  else { me.moving=false; if(me.atkT<=0)basicAttack(me,t); }
 }
 // ================= DRAW =================
 function draw(){
@@ -740,7 +738,7 @@ function draw(){
   drawDungeon(); drawLighting(); drawTraps(); drawLoots(); drawTelegraphs();
   for(const m of monsters)drawMonster(m);
   for(const h of party)drawHero(h);
-  drawProjectiles(); drawParticles(); drawFloaters();
+  drawProjectiles(); drawParticles(); drawEffects(); drawFloaters();
   drawFogOverlay(); drawHUD(); drawMinimap();
   if(state==="win")drawEnd(true);
   if(state==="lose")drawEnd(false);
@@ -883,7 +881,7 @@ function drawHero(h){
   const x=h.x-cam.x, y=h.y-cam.y;
   const st=heroStats(h);
   const flip=Math.cos(h.face)<0;
-  const moving=h.path&&h.path.length>0;
+  const moving=!!h.moving;
   const frame=moving?Math.floor(elapsed*9+h.wob)%4:0;
   // shadow
   ctx.fillStyle="rgba(0,0,0,0.35)"; ctx.beginPath(); ctx.ellipse(x,y+15,15,5.5,0,0,Math.PI*2); ctx.fill();
@@ -930,7 +928,7 @@ function drawMonster(m){
     const hover=Math.sin(elapsed*6+m.wob)*4;
     drawn=spr("imp",x,y+12+hover,40,40,f,flip);
   } else if(m.type==="skeleton_archer"){
-    const moving=m.path&&m.path.length>0;
+    const moving=!!m.moving;
     const f=moving?Math.floor(elapsed*8+m.wob)%4:0;
     drawn=spr("skelet",x,y+14,40,40,f,flip);
   } else { // boss: Crypt Keeper lich
@@ -957,8 +955,51 @@ function drawMonster(m){
 function drawProjectiles(){
   for(const p of projectiles){
     const x=p.x-cam.x,y=p.y-cam.y;
-    ctx.fillStyle=p.color; ctx.beginPath(); ctx.arc(x,y,p.r,0,Math.PI*2); ctx.fill();
-    if(p.kind==="fireball"){ ctx.fillStyle="rgba(255,160,60,0.5)"; ctx.beginPath(); ctx.arc(x,y,p.r+5,0,Math.PI*2); ctx.fill(); }
+    if(p.kind==="fireball"){
+      const g=ctx.createRadialGradient(x,y,2,x,y,17);
+      g.addColorStop(0,"#fff2c8"); g.addColorStop(0.45,"#ff9f2e"); g.addColorStop(1,"rgba(255,80,20,0)");
+      ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,17,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle="#fff2c8"; ctx.beginPath(); ctx.arc(x,y,5,0,Math.PI*2); ctx.fill();
+    } else if(p.kind==="bone"){
+      const a=Math.atan2(p.vy,p.vx);
+      ctx.strokeStyle="#e8e0c0"; ctx.lineWidth=4; ctx.lineCap="round";
+      ctx.beginPath(); ctx.moveTo(x-Math.cos(a)*15,y-Math.sin(a)*15); ctx.lineTo(x,y); ctx.stroke();
+      ctx.fillStyle="#fff"; ctx.beginPath(); ctx.arc(x,y,3,0,Math.PI*2); ctx.fill();
+    } else {
+      ctx.fillStyle=p.color; ctx.beginPath(); ctx.arc(x,y,p.r,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle="rgba(255,255,255,0.7)"; ctx.beginPath(); ctx.arc(x-1.5,y-1.5,2,0,Math.PI*2); ctx.fill();
+    }
+  }
+}
+function drawEffects(){
+  for(const f of effects){
+    const x=f.x-cam.x, y=f.y-cam.y, p=f.t/f.life;
+    if(f.kind==="slash"){
+      ctx.save(); ctx.translate(x,y); ctx.rotate(f.angle); ctx.globalAlpha=1-p;
+      ctx.strokeStyle=f.color; ctx.lineCap="round"; ctx.lineWidth=10*(1-p)+2;
+      ctx.beginPath(); ctx.arc(0,0,30,-0.85,0.85); ctx.stroke();
+      ctx.strokeStyle="#ffffff"; ctx.lineWidth=3;
+      ctx.beginPath(); ctx.arc(0,0,23,-0.7,0.7); ctx.stroke();
+      ctx.restore(); ctx.globalAlpha=1;
+    } else if(f.kind==="boom"){
+      ctx.globalAlpha=1-p;
+      ctx.fillStyle="rgba(255,190,90,0.75)";
+      ctx.beginPath(); ctx.arc(x,y,f.r*p+12,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle="#ff9f2e"; ctx.lineWidth=5;
+      ctx.beginPath(); ctx.arc(x,y,f.r*(0.25+p*0.9),0,Math.PI*2); ctx.stroke();
+      ctx.globalAlpha=1;
+    } else if(f.kind==="scorch"){
+      ctx.globalAlpha=0.5*(1-p);
+      ctx.fillStyle="#080403";
+      ctx.beginPath(); ctx.ellipse(x,y,f.r,f.r*0.7,0,0,Math.PI*2); ctx.fill();
+      ctx.globalAlpha=1;
+    } else if(f.kind==="healring"){
+      ctx.globalAlpha=1-p; ctx.strokeStyle="#7dff9a"; ctx.lineWidth=4;
+      ctx.beginPath(); ctx.arc(x,y,18+p*72,0,Math.PI*2); ctx.stroke();
+      ctx.globalAlpha=(1-p)*0.5; ctx.fillStyle="#7dff9a";
+      ctx.beginPath(); ctx.arc(x,y,18+p*72,0,Math.PI*2); ctx.fill();
+      ctx.globalAlpha=1;
+    }
   }
 }
 function drawParticles(){
@@ -1131,6 +1172,7 @@ onTap=function(px,py){
 let lastT=0;
 function frame(now){
   const dt=Math.min(0.05,(now-lastT)/1000||0.016); lastT=now;
+  if(hitstop>0){ hitstop-=dt; draw(); requestAnimationFrame(frame); return; } // impact freeze
   update(dt); draw();
   requestAnimationFrame(frame);
 }
