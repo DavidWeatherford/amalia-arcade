@@ -1176,7 +1176,8 @@ function drawHero(h){
   let x=h.x-cam.x, y=h.y-cam.y;
   if(h.lunge&&h.lunge.t<h.lunge.life){const lp=Math.sin(Math.PI*h.lunge.t/h.lunge.life);x+=h.lunge.dx*lp;y+=h.lunge.dy*lp;}
   const st=heroStats(h);
-  const flip=Math.cos(h.face)<0;
+  const facingLeft=Math.cos(h.face)<0;
+  const flip=h.atkAnim>0?facingLeft:(h.cls==="mage"?!facingLeft:facingLeft);
   const moving=!!h.moving;
   const frame=moving?Math.floor(elapsed*9+h.wob)%4:0;
   // shadow
@@ -1192,7 +1193,7 @@ function drawHero(h){
   const bob=moving?Math.abs(Math.sin(elapsed*9+h.wob))*3:0;
   const pop=h.hitT>0?1+0.15*(h.hitT/0.15):1; // F: squash-and-stretch on hit
   ctx.save(); ctx.translate(x,y+16-bob); ctx.scale(pop,2-pop);
-  if(moving)ctx.rotate(flip?-0.09:0.09); // lean into the run
+  if(moving)ctx.rotate(facingLeft?-0.09:0.09); // lean into the run
   ctx.translate(-x,-(y+16-bob));
   const hspr=h.atkAnim>0?CLASS_SPR[h.cls]+"_atk":CLASS_SPR[h.cls];
   if(!spr2(hspr,x,y+16-bob,64,flip)){
@@ -1507,7 +1508,7 @@ function drawPick(){
     ctx.fillStyle="rgba(20,12,32,0.95)"; ctx.beginPath(); ctx.roundRect(x,y,cw,h,16); ctx.fill();
     ctx.strokeStyle=c.color; ctx.lineWidth=4; ctx.beginPath(); ctx.roundRect(x,y,cw,h,16); ctx.stroke();
     ctx.fillStyle="rgba(0,0,0,0.45)"; ctx.beginPath(); ctx.ellipse(x+cw/2,y+116,34,10,0,0,Math.PI*2); ctx.fill();
-    spr2(CLASS_SPR[k],x+cw/2,y+116,84,false);
+    spr2(CLASS_SPR[k],x+cw/2,y+116,84,k==="mage");
     ctx.fillStyle="#fff"; ctx.font="bold 20px sans-serif"; ctx.textAlign="center";
     ctx.fillText(c.name,x+cw/2,y+130);
     ctx.font="14px sans-serif"; ctx.fillStyle="#cfc3e8";
